@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ANCESTORS - 神に導かれし部族 -</title>
+  <link rel="stylesheet" href="style.css?v=base-rest-balance">
+</head>
+<body>
+  <main id="gameShell" class="title-mode">
+    <canvas id="gameCanvas" width="256" height="384" aria-label="ANCESTORS game canvas"></canvas>
+
+    <section id="topHud" class="hud">
+      <div>
+        <span id="resourceStats">人 2 / 果 1 / 叡 0 / 世代 1 / 年 1</span>
+        <span id="statusLine">読み込み中...</span>
+      </div>
+      <div class="hud-actions" aria-hidden="true"></div>
+    </section>
+
+    <section id="bottomHud" class="hud">
+      <div id="playerStats"></div>
+      <div id="tribeStats"></div>
+    </section>
+
+    <div id="overlay" class="overlay">
+      <div class="panel">
+        <h1>ANCESTORS</h1>
+        <p class="subtitle">神に導かれし部族</p>
+        <p id="overlayText">小さな島で採集し、拠点を築き、世代をつないで部族を育てよう。</p>
+        <div id="candidateList" class="candidate-list"></div>
+        <div id="historyList" class="history-list"></div>
+        <div class="button-grid">
+          <button id="startButton" type="button">ゲーム開始</button>
+          <button id="loadButton" type="button">ロード</button>
+          <button id="historyButton" type="button">歴史帳</button>
+          <button id="manualSaveButton" type="button">手動セーブ</button>
+          <button id="debugWisdomButton" type="button">DEBUG 叡智+20</button>
+          <button id="debugFoodButton" type="button">DEBUG 果物+30</button>
+          <button id="debugDeathButton" type="button">DEBUG 強制死亡</button>
+          <button id="resetButton" type="button">セーブリセット</button>
+          <button id="closeOverlayButton" type="button">閉じる</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="game.js?v=tribe-storage-fix"></script>
+</body>
+</html>

@@ -519,14 +519,22 @@
   }
 
   function resizeCanvas() {
+    const availableW = window.innerWidth;
+    const availableH = window.innerHeight;
+    // 起動直後はレイアウト未確定で innerWidth/Height が 0〜1 になることがある。
+    // その値でスケールを決めるとキャンバスが極小（scale 0.1）に固定されるため、
+    // まともなサイズが取れるまで次フレームに再試行する。
+    if (availableW < 50 || availableH < 50) {
+      requestAnimationFrame(resizeCanvas);
+      return;
+    }
+
     applyCanvasLayout();
     canvas.width = INTERNAL_W;
     canvas.height = INTERNAL_H;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
-    const availableW = window.innerWidth;
-    const availableH = window.innerHeight;
     const canvasBorder = 4;
     const fitScale = Math.min(availableW / (INTERNAL_W + canvasBorder), availableH / (INTERNAL_H + canvasBorder));
     const scale = fitScale >= 1 ? Math.max(1, Math.floor(fitScale)) : Math.max(0.1, Math.floor(fitScale * 1000) / 1000);
@@ -4533,6 +4541,8 @@
   }
 
   window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("orientationchange", resizeCanvas);
+  window.addEventListener("load", resizeCanvas);
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
     if (state && state.milestoneOverlay) {

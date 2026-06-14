@@ -60,8 +60,43 @@
   const AUTOSAVE_TURN_INTERVAL = 20;
   const HOLD_MOVE_DELAY = 180;
   const TILE_METERS = 50;
-  const MAP_W = 200;
-  const MAP_H = 200;
+
+  // ワールドプリセット。島のサイズと地形/距離感をまとめて切り替える。
+  // tutorial: 基本文明ループを短時間で体験させる小さな島（チュートリアル）。
+  // mainland / large_world: 将来の拡張用（より広い探索向け）。
+  const WORLD_PRESETS = {
+    tutorial: {
+      w: 96,
+      h: 96,
+      riverSourceSpacing: 12, // 川の源（高山頂）同士の最小間隔
+      riverMaxSources: 4,     // 川 2〜4本程度
+      riverDenseDist: 3,      // 川からこの距離まで → 大きい森
+      riverSmallDist: 7,      // さらにこの距離まで → 小さい森
+      highLevelPct: 0.99,     // 高山を絞る（3〜6箇所程度）
+    },
+    mainland: {
+      w: 160,
+      h: 160,
+      riverSourceSpacing: 14,
+      riverMaxSources: 10,
+      riverDenseDist: 3,
+      riverSmallDist: 7,
+      highLevelPct: 0.975,
+    },
+    large_world: {
+      w: 200,
+      h: 200,
+      riverSourceSpacing: 14,
+      riverMaxSources: 16,
+      riverDenseDist: 3,
+      riverSmallDist: 7,
+      highLevelPct: 0.975,
+    },
+  };
+  const WORLD_PRESET = "tutorial";
+  const WORLD = WORLD_PRESETS[WORLD_PRESET] || WORLD_PRESETS.tutorial;
+  const MAP_W = WORLD.w;
+  const MAP_H = WORLD.h;
   const MOVE_ANIM_MS = 100;
   const VISION_RADII = [2, 3, 4, 5];
   const EVOLUTION_THRESHOLDS = [0, 8, 18, 35];
@@ -140,14 +175,16 @@
   ];
 
   const tileInfo = {
-    [Tile.SEA]: { name: "海", color: "#111111", dark: "#777", passable: true },
-    [Tile.GRASS]: { name: "草原", color: "#eeeeee", dark: "#aaa", passable: true },
-    [Tile.FOREST]: { name: "小さい森", color: "#dddddd", dark: "#111", passable: true },
-    [Tile.DEEP_FOREST]: { name: "大きい森", color: "#b9b9b9", dark: "#000", passable: true },
-    [Tile.MOUNTAIN]: { name: "山", color: "#cfcfcf", dark: "#333", passable: true },
-    [Tile.HIGH_MOUNTAIN]: { name: "高い山", color: "#e9e9e9", dark: "#222", passable: true },
-    [Tile.RIVER]: { name: "川", color: "#3a3a3a", dark: "#888", passable: true },
-    [Tile.MONOLITH]: { name: "黒石", color: "#d8d8d8", dark: "#111", passable: true },
+    // モノクロ線画方針: 地面はほぼ白で統一し、形（グリフ）で識別する。
+    // 海だけはやや濃いグレーにして、海岸線が輪郭として読めるようにする。
+    [Tile.SEA]: { name: "海", color: "#c8ccd0", dark: "#777", passable: true },
+    [Tile.GRASS]: { name: "草原", color: "#f5f5f5", dark: "#aaa", passable: true },
+    [Tile.FOREST]: { name: "小さい森", color: "#f5f5f5", dark: "#111", passable: true },
+    [Tile.DEEP_FOREST]: { name: "大きい森", color: "#ededed", dark: "#000", passable: true },
+    [Tile.MOUNTAIN]: { name: "山", color: "#f5f5f5", dark: "#333", passable: true },
+    [Tile.HIGH_MOUNTAIN]: { name: "高い山", color: "#f5f5f5", dark: "#222", passable: true },
+    [Tile.RIVER]: { name: "川", color: "#f0f0f0", dark: "#888", passable: true },
+    [Tile.MONOLITH]: { name: "黒石", color: "#f5f5f5", dark: "#111", passable: true },
   };
 
   const wisdomMilestones = [
@@ -361,6 +398,7 @@
       lastPopulationCheckTurn: 0,
       foodShortageCount: 0,
       lastAutosaveTurn: 0,
+      debugImmortal: false,
     };
     revealVisibleTiles(newState);
     return newState;
@@ -440,10 +478,10 @@
   // 環境シミュレーション型ワールド生成。
   // 標高マップ → 海岸線 → 山岳/高山 → 川 → 森林 → の順で地形を決める。
   // 「山があれば川、川があれば森」が予測できる連続した世界をつくる。
-  const RIVER_SOURCE_SPACING = 14; // 川の源（高山頂）同士の最小間隔
-  const RIVER_MAX_SOURCES = 16;
-  const RIVER_DENSE_DIST = 3;      // 川からこの距離まで → 大きい森
-  const RIVER_SMALL_DIST = 7;      // さらにこの距離まで → 小さい森
+  const RIVER_SOURCE_SPACING = WORLD.riverSourceSpacing; // 川の源（高山頂）同士の最小間隔
+  const RIVER_MAX_SOURCES = WORLD.riverMaxSources;
+  const RIVER_DENSE_DIST = WORLD.riverDenseDist;   // 川からこの距離まで → 大きい森
+  const RIVER_SMALL_DIST = WORLD.riverSmallDist;   // さらにこの距離まで → 小さい森
   function generateIslandMap() {
     const cx = (MAP_W - 1) / 2;
     const cy = (MAP_H - 1) / 2;
@@ -477,7 +515,7 @@
     const pct = (p) => flat[Math.min(flat.length - 1, Math.floor(p * flat.length))];
     const seaLevel = pct(0.40);   // 下位40% → 海
     const mtnLevel = pct(0.75);   // 上位25% → 山岳帯
-    const highLevel = pct(0.975); // 上位2.5% → 高山（山岳の約10%）
+    const highLevel = pct(WORLD.highLevelPct); // 上位 → 高山（少数）
 
     // 2) 標高で素地を分類（低地はあとで川との距離で森/平原に分ける）。
     const tiles = [];
@@ -961,6 +999,7 @@
     revealAroundBases();
     updateInventions();
     updateEvolution();
+    if (state.debugImmortal && state.player) state.player.hp = 100; // IMMORTAL: HP満タン維持
     if (state.turn - state.lastAutosaveTurn >= AUTOSAVE_TURN_INTERVAL) {
       state.lastAutosaveTurn = state.turn;
       saveGame();
@@ -1017,6 +1056,7 @@
     if (!Number.isFinite(state.lastAutosaveTurn)) state.lastAutosaveTurn = state.turn;
     if (typeof state.gameMenuOpen !== "boolean") state.gameMenuOpen = false;
     if (typeof state.systemMenuOpen !== "boolean") state.systemMenuOpen = false;
+    if (typeof state.debugImmortal !== "boolean") state.debugImmortal = false;
     if (typeof state.baseMenuOpen !== "boolean") state.baseMenuOpen = false;
     if (typeof state.craftMenuOpen !== "boolean") state.craftMenuOpen = false;
     if (typeof state.settlementUnlocked !== "boolean") state.settlementUnlocked = false;
@@ -1169,6 +1209,7 @@
 
   function damageLife(amount, notice = "") {
     if (!state || !state.player || amount <= 0) return;
+    if (state.debugImmortal) return; // IMMORTAL: 寿命/LIFE減少・寿命死を無効化
     const reduction = getCraftBonus("damageReduction");
     if (reduction > 0) amount = amount * (1 - Math.min(0.9, reduction));
     const p = state.player;
@@ -1362,10 +1403,11 @@
     }
   }
 
-  // 建設可否を判定。優先順位: terrain > tooClose > tooFar > ok
+  // 建設可否を判定。優先順位: unexplored > terrain > tooClose > tooFar > ok
   function campPlacementStatus(x, y) {
     if (!state || !state.bases) return "terrain";
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return "terrain";
+    if (!isSeenTile(x, y)) return "unexplored";
     const t = state.map[y] && state.map[y][x];
     if (!isBuildableTile(t)) return "terrain";
     if (state.bases.some((b) => b.x === x && b.y === y)) return "terrain";
@@ -1445,6 +1487,9 @@
       const foodCost = state.inventions.storage ? Math.max(1, Math.ceil(state.population * 0.45)) : Math.max(1, Math.ceil(state.population * 0.6));
       const eaten = consumeTribeFood(foodCost);
       if (eaten >= foodCost) {
+        state.foodShortageCount = 0;
+      } else if (state.debugImmortal) {
+        // IMMORTAL: 飢餓ダメージ・人口減少を無効化
         state.foodShortageCount = 0;
       } else {
         state.foodShortageCount += 1;
@@ -2287,6 +2332,10 @@
     if (!state.placingCamp || !state.campCursor) return;
     const { x, y } = state.campCursor;
     const status = campPlacementStatus(x, y);
+    if (status === "unexplored") {
+      addLog("UNEXPLORED AREA");
+      return;
+    }
     if (status === "terrain") {
       addLog("BLOCKED TERRAIN");
       return;
@@ -2397,6 +2446,7 @@
   }
 
   function killPlayer(reason, forced = false) {
+    if (state && state.debugImmortal) return; // IMMORTAL: 死亡・世代交代を無効化
     if (mode !== "playing" && !forced) return;
     const p = state.player;
     const relicId = cryptoRandomId();
@@ -2590,17 +2640,7 @@
       const cy = state.campCursor.y;
       const csx = Math.floor(cx * TILE_SIZE - cameraX);
       const csy = Math.floor(cy * TILE_SIZE - cameraY);
-      const status = campPlacementStatus(cx, cy);
-      // 有効=緑 / 近すぎ=赤 / 遠すぎ=灰 / 地形NG=赤
-      const cursorColor = status === "ok" ? "#4f4"
-        : status === "tooFar" ? "#888"
-        : "#f44";
-      ctx.fillStyle = cursorColor;
-      ctx.fillRect(csx, csy, TILE_SIZE, 2);
-      ctx.fillRect(csx, csy + TILE_SIZE - 2, TILE_SIZE, 2);
-      ctx.fillRect(csx, csy, 2, TILE_SIZE);
-      ctx.fillRect(csx + TILE_SIZE - 2, csy, 2, TILE_SIZE);
-      if (status === "ok") drawCamp(csx, csy, 1);
+      drawCampCursor(csx, csy, campPlacementStatus(cx, cy));
     }
     if (state.huntingUnlocked) {
       for (const animal of state.animals) {
@@ -2978,17 +3018,65 @@
     drawOutlinedPixelTextScaled("!", sx + 13, sy + 3, 2);
   }
 
+  // ===== モノクロ線画ヘルパー =====
+  // 全アセット共通の黒線。輪郭主体・線幅一定・塗り最小限で象形文字的に描く。
+  const GLYPH = "#161616";
+  function glyphSetup(w) {
+    ctx.strokeStyle = GLYPH;
+    ctx.lineWidth = w;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+  }
+  // 折れ線。pts は [x0,y0, x1,y1, ...]（タイル左上 sx,sy からの相対座標）。
+  function gline(sx, sy, pts, w = 2, close = false) {
+    glyphSetup(w);
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i += 2) {
+      const X = sx + pts[i];
+      const Y = sy + pts[i + 1];
+      if (i === 0) ctx.moveTo(X, Y);
+      else ctx.lineTo(X, Y);
+    }
+    if (close) ctx.closePath();
+    ctx.stroke();
+  }
+  function gcircle(sx, sy, cx, cy, r, w = 2, fill = false) {
+    ctx.beginPath();
+    ctx.arc(sx + cx, sy + cy, r, 0, Math.PI * 2);
+    if (fill) {
+      ctx.fillStyle = GLYPH;
+      ctx.fill();
+    }
+    glyphSetup(w);
+    ctx.stroke();
+  }
+  function gdot(sx, sy, x, y, r = 1.4) {
+    ctx.fillStyle = GLYPH;
+    ctx.beginPath();
+    ctx.arc(sx + x, sy + y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function drawTilePattern(tile, sx, sy, x, y) {
     if (tile === Tile.GRASS) {
-      ctx.fillStyle = "#c9c9c9";
-      for (let i = 0; i < 4; i += 1) {
-        const px = (x * 11 + y * 5 + i * 9) % 26 + 3;
-        const py = (y * 7 + x * 3 + i * 11) % 24 + 4;
-        ctx.fillRect(sx + px, sy + py, 3, 1);
+      // 平原: 主張しない背景。ごく少数の薄い短線のみ。
+      ctx.strokeStyle = "#cfcfcf";
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      if (seededNoise(x, y) > 0.45) {
+        ctx.beginPath();
+        ctx.moveTo(sx + 9, sy + 22);
+        ctx.lineTo(sx + 11, sy + 18);
+        ctx.moveTo(sx + 12, sy + 22);
+        ctx.lineTo(sx + 13, sy + 19);
+        ctx.stroke();
       }
-      ctx.fillStyle = "#999";
-      if (seededNoise(x, y) > 0.48) ctx.fillRect(sx + 8, sy + 22, 4, 1);
-      if (seededNoise(y, x) > 0.62) ctx.fillRect(sx + 22, sy + 10, 3, 1);
+      if (seededNoise(y, x) > 0.6) {
+        ctx.beginPath();
+        ctx.moveTo(sx + 22, sy + 12);
+        ctx.lineTo(sx + 24, sy + 9);
+        ctx.stroke();
+      }
     }
     if (tile === Tile.FOREST) {
       drawSmallForest(sx, sy, x, y);
@@ -3003,205 +3091,145 @@
       drawHighMountain(sx, sy);
     }
     if (tile === Tile.SEA) {
-      ctx.fillStyle = "#999";
-      ctx.fillRect(sx + 4, sy + 10, 10, 1);
-      ctx.fillRect(sx + 18, sy + 16, 9, 1);
-      ctx.fillRect(sx + 7, sy + 24, 12, 1);
-      ctx.fillStyle = "#e8e8e8";
-      ctx.fillRect(sx + 9, sy + 12, 4, 1);
-      ctx.fillRect(sx + 21, sy + 18, 3, 1);
+      // 海: 控えめな波線のみ。海岸線は陸との明度差で読ませる。
+      ctx.strokeStyle = "#9aa0a6";
+      ctx.lineWidth = 1.5;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(sx + 6, sy + 12); ctx.lineTo(sx + 9, sy + 10); ctx.lineTo(sx + 12, sy + 12); ctx.lineTo(sx + 15, sy + 10);
+      ctx.moveTo(sx + 18, sy + 21); ctx.lineTo(sx + 21, sy + 19); ctx.lineTo(sx + 24, sy + 21); ctx.lineTo(sx + 27, sy + 19);
+      ctx.stroke();
     }
     if (tile === Tile.RIVER) {
-      // 流れる水。海より明るく、横方向の流線で「川」と分かるようにする。
-      ctx.fillStyle = "#555";
-      ctx.fillRect(sx, sy + 8, TILE_SIZE, 16);
-      ctx.fillStyle = "#888";
-      ctx.fillRect(sx + 2, sy + 12, 12, 1);
-      ctx.fillRect(sx + 16, sy + 15, 13, 1);
-      ctx.fillRect(sx + 5, sy + 19, 14, 1);
-      ctx.fillStyle = "#cfcfcf";
-      ctx.fillRect(sx + 9, sy + 11, 5, 1);
-      ctx.fillRect(sx + 20, sy + 18, 4, 1);
-      ctx.fillRect(sx + 3, sy + 21, 3, 1);
+      drawRiverChannel(sx, sy, x, y);
     }
     if (tile === Tile.MONOLITH) {
-      ctx.fillStyle = "#555";
-      ctx.fillRect(sx + 6, sy + 25, 20, 4);
-      ctx.fillRect(sx + 10, sy + 21, 13, 4);
-      ctx.fillStyle = "#111";
-      ctx.fillRect(sx + 14, sy + 5, 9, 24);
-      ctx.fillRect(sx + 16, sy + 2, 6, 3);
-      ctx.fillStyle = "#eee";
-      ctx.fillRect(sx + 18, sy + 8, 1, 7);
+      // 黒石: タイル背景の目印（実体は drawMonolith）。先細りの立石を塗りで。
+      ctx.fillStyle = GLYPH;
+      ctx.beginPath();
+      ctx.moveTo(sx + 15, sy + 4);
+      ctx.lineTo(sx + 21, sy + 5);
+      ctx.lineTo(sx + 23, sy + 28);
+      ctx.lineTo(sx + 13, sy + 28);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#f5f5f5";
+      ctx.fillRect(sx + 18, sy + 9, 1, 9);
     }
   }
 
-  // 小さい森: 低い木がまばら、明るめ/薄め。果物が採れる雰囲気。
+  // 川: 接続する隣接（川・海）方向へ中心から細い流路を描き、連続した一本に見せる。
+  function drawRiverChannel(sx, sy, x, y) {
+    const isWater = (gx, gy) => {
+      if (gy < 0 || gy >= state.map.length || gx < 0 || gx >= state.map[0].length) return false;
+      const t = state.map[gy][gx];
+      return t === Tile.RIVER || t === Tile.SEA;
+    };
+    const ends = [];
+    if (isWater(x, y - 1)) ends.push([16, 0]);
+    if (isWater(x, y + 1)) ends.push([16, 32]);
+    if (isWater(x - 1, y)) ends.push([0, 16]);
+    if (isWater(x + 1, y)) ends.push([32, 16]);
+    glyphSetup(3);
+    ctx.strokeStyle = "#7d8893";
+    ctx.beginPath();
+    if (ends.length === 0) {
+      // 孤立: 短い流れの記号
+      ctx.moveTo(sx + 8, sy + 18);
+      ctx.lineTo(sx + 14, sy + 14);
+      ctx.lineTo(sx + 20, sy + 18);
+      ctx.lineTo(sx + 24, sy + 14);
+    } else {
+      for (const [ex, ey] of ends) {
+        ctx.moveTo(sx + 16, sy + 16);
+        ctx.lineTo(sx + ex, sy + ey);
+      }
+    }
+    ctx.stroke();
+  }
+
+  // 小さい森: 低い草束。横に広がる軽いシルエットで「果物が採れそう」な印象。
   function drawSmallForest(sx, sy, x, y) {
-    drawConifer(sx + 4, sy + 13, 9, "#bbb", "#888");
-    drawConifer(sx + 18, sy + 11, 10, "#cccccc", "#999");
-    if (seededNoise(x, y) > 0.55) drawConifer(sx + 11, sy + 16, 8, "#bbb", "#888");
-    // まばらな下草
-    ctx.fillStyle = "#aaa";
-    ctx.fillRect(sx + 2, sy + 26, 5, 1);
-    ctx.fillRect(sx + 13, sy + 27, 6, 1);
-    ctx.fillRect(sx + 24, sy + 25, 5, 1);
-    ctx.fillStyle = "#ccc";
-    ctx.fillRect(sx + 8, sy + 22, 3, 1);
-    ctx.fillRect(sx + 22, sy + 20, 3, 1);
+    // 中央の草束（扇状に伸びる細い線）
+    gline(sx, sy, [12, 27, 9, 17], 2);
+    gline(sx, sy, [14, 27, 14, 14], 2);
+    gline(sx, sy, [16, 27, 15, 13], 2);
+    gline(sx, sy, [16, 27, 19, 14], 2);
+    gline(sx, sy, [18, 27, 22, 16], 2);
+    gline(sx, sy, [20, 28, 24, 19], 2);
+    // 横へ広がる小さな下草
+    gline(sx, sy, [3, 28, 6, 23], 2);
+    gline(sx, sy, [27, 28, 25, 22], 2);
+    if (seededNoise(x, y) > 0.55) gline(sx, sy, [6, 28, 8, 24], 2);
   }
 
-  // 大きい森: 木が密集して濃い色。枝資源が採れそうな見た目。
+  // 大きい森: 丸い樹冠を持つ木を複数。草束より高く密度が高く「枝が採れそう」な森。
   function drawDenseForest(sx, sy, x, y) {
-    drawConifer(sx + 1, sy + 6, 14, "#666", "#333");
-    drawConifer(sx + 9, sy + 3, 17, "#777", "#3a3a3a");
-    drawConifer(sx + 18, sy + 5, 15, "#666", "#333");
-    drawConifer(sx + 24, sy + 8, 13, "#5a5a5a", "#2a2a2a");
-    drawConifer(sx + 6, sy + 13, 14, "#555", "#2a2a2a");
-    // 暗い林床と落ちた枝
-    ctx.fillStyle = "#2e2e2e";
-    ctx.fillRect(sx, sy + 27, 32, 3);
-    ctx.fillStyle = "#888";
-    ctx.fillRect(sx + 5, sy + 29, 7, 1);
-    ctx.fillRect(sx + 19, sy + 28, 8, 1);
+    // 木1（手前・大きい）
+    gcircle(sx, sy, 12, 12, 7, 2);
+    gline(sx, sy, [12, 18, 12, 27], 2);
+    // 木2（奥・小さい）
+    gcircle(sx, sy, 22, 15, 5, 2);
+    gline(sx, sy, [22, 20, 22, 27], 2);
+    // 樹冠内の葉表現（縦の短線）
+    gline(sx, sy, [9, 12, 9, 16], 1.5);
+    gline(sx, sy, [15, 11, 15, 15], 1.5);
   }
 
-  function drawConifer(x, y, h, mid, dark) {
-    ctx.fillStyle = dark;
-    ctx.fillRect(x + 5, y + h - 3, 3, 5);
-    ctx.fillStyle = mid;
-    ctx.fillRect(x + 5, y, 3, 3);
-    ctx.fillRect(x + 3, y + 3, 7, 3);
-    ctx.fillRect(x + 2, y + 7, 9, 3);
-    ctx.fillRect(x, y + 11, 13, 3);
-    ctx.fillStyle = dark;
-    ctx.fillRect(x + 4, y + 6, 6, 2);
-    ctx.fillRect(x + 3, y + 12, 8, 2);
-  }
-
+  // 低山: なだらかな二峰。横広で穏やか。STONE 産地。
   function drawMountainRange(sx, sy) {
-    ctx.fillStyle = "#555";
-    ctx.fillRect(sx + 2, sy + 26, 28, 3);
-    ctx.fillRect(sx + 5, sy + 22, 23, 4);
-    ctx.fillRect(sx + 9, sy + 17, 18, 5);
-    ctx.fillRect(sx + 13, sy + 12, 11, 5);
-    ctx.fillRect(sx + 17, sy + 7, 5, 5);
-    ctx.fillStyle = "#777";
-    ctx.fillRect(sx + 3, sy + 24, 10, 3);
-    ctx.fillRect(sx + 22, sy + 23, 8, 4);
-    ctx.fillRect(sx + 6, sy + 18, 8, 5);
-    ctx.fillRect(sx + 23, sy + 15, 6, 7);
-    ctx.fillStyle = "#222";
-    ctx.fillRect(sx + 20, sy + 12, 4, 15);
-    ctx.fillRect(sx + 12, sy + 19, 3, 8);
-    ctx.fillRect(sx + 26, sy + 20, 3, 7);
-    ctx.fillStyle = "#eeeeee";
-    ctx.fillRect(sx + 17, sy + 8, 4, 2);
-    ctx.fillRect(sx + 15, sy + 12, 5, 2);
-    ctx.fillRect(sx + 9, sy + 18, 4, 2);
-    ctx.fillRect(sx + 24, sy + 16, 3, 2);
-    ctx.fillStyle = "#aaa";
-    ctx.fillRect(sx + 6, sy + 25, 8, 1);
-    ctx.fillRect(sx + 14, sy + 22, 5, 1);
+    gline(sx, sy, [2, 28, 11, 15, 16, 20, 22, 13, 30, 28], 2);
+    // 稜線
+    gline(sx, sy, [11, 15, 9, 23], 2);
+    gline(sx, sy, [22, 13, 20, 22], 2);
   }
 
-  // 高い山: 尖った山頂、明るい/雪の頂点。フリント産地として分かる見た目。
+  // 高い山: 中央に鋭い主峰。低山より縦に高くシャープ。FLINT 産地。
   function drawHighMountain(sx, sy) {
-    // 鋭い稜線を持つ高い山体
-    ctx.fillStyle = "#444";
-    ctx.fillRect(sx + 2, sy + 27, 28, 2);
-    ctx.fillRect(sx + 5, sy + 23, 22, 4);
-    ctx.fillRect(sx + 8, sy + 18, 16, 5);
-    ctx.fillRect(sx + 11, sy + 13, 10, 5);
-    ctx.fillRect(sx + 14, sy + 8, 5, 5);
-    ctx.fillRect(sx + 15, sy + 3, 3, 5);
-    // 左斜面の陰
-    ctx.fillStyle = "#666";
-    ctx.fillRect(sx + 4, sy + 24, 9, 3);
-    ctx.fillRect(sx + 8, sy + 19, 6, 4);
-    ctx.fillRect(sx + 11, sy + 14, 4, 4);
-    // 深い谷
-    ctx.fillStyle = "#1a1a1a";
-    ctx.fillRect(sx + 19, sy + 13, 3, 14);
-    ctx.fillRect(sx + 24, sy + 20, 3, 7);
-    // 雪の積もった尖頂
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(sx + 15, sy + 3, 3, 4);
-    ctx.fillRect(sx + 14, sy + 7, 5, 2);
-    ctx.fillRect(sx + 12, sy + 11, 4, 2);
-    ctx.fillRect(sx + 17, sy + 11, 3, 2);
-    ctx.fillStyle = "#e2e2e2";
-    ctx.fillRect(sx + 10, sy + 15, 3, 2);
-    ctx.fillRect(sx + 20, sy + 16, 3, 2);
+    gline(sx, sy, [2, 29, 10, 19, 13, 23, 17, 4, 21, 21, 24, 17, 30, 29], 2);
+    // 主峰の稜線
+    gline(sx, sy, [17, 4, 15, 19], 2);
+    // 雪冠（小さな山形）
+    gline(sx, sy, [14, 10, 17, 7, 20, 10], 2);
   }
 
   function drawResourceObject(resourceType, sx, sy, x, y) {
-    ctx.fillStyle = "#111";
     if (resourceType === Resource.FRUIT) {
-      ctx.fillRect(sx + 13, sy + 13, 11, 3);
-      ctx.fillRect(sx + 11, sy + 16, 15, 9);
-      ctx.fillRect(sx + 13, sy + 25, 11, 3);
-      ctx.fillRect(sx + 16, sy + 9, 3, 4);
-      ctx.fillRect(sx + 18, sy + 8, 5, 2);
-      ctx.fillStyle = "#777";
-      ctx.fillRect(sx + 14, sy + 16, 10, 8);
-      ctx.fillRect(sx + 16, sy + 24, 6, 2);
-      ctx.fillStyle = "#bbb";
-      ctx.fillRect(sx + 15, sy + 15, 5, 3);
-      ctx.fillRect(sx + 13, sy + 19, 3, 4);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx + 16, sy + 16, 3, 2);
-      ctx.fillRect(sx + 20, sy + 9, 3, 1);
+      // 果実: 丸い実 + 茎 + 小さな葉。食べ物だと分かれば十分。
+      gcircle(sx, sy, 15, 19, 6, 2);
+      gline(sx, sy, [15, 13, 17, 8], 2);
+      gline(sx, sy, [17, 8, 22, 9, 19, 13], 2, true);
+      gdot(sx, sy, 13, 18, 1.2);
       return;
     }
     if (resourceType === Resource.WOOD) {
-      ctx.fillRect(sx + 15, sy + 17, 5, 13);
-      ctx.fillRect(sx + 11, sy + 14, 5, 8);
-      ctx.fillRect(sx + 8, sy + 11, 5, 5);
-      ctx.fillRect(sx + 20, sy + 15, 5, 7);
-      ctx.fillRect(sx + 23, sy + 12, 5, 5);
-      ctx.fillRect(sx + 13, sy + 29, 12, 2);
-      ctx.fillStyle = "#777";
-      ctx.fillRect(sx + 17, sy + 18, 1, 10);
-      ctx.fillRect(sx + 13, sy + 16, 2, 4);
-      ctx.fillRect(sx + 21, sy + 17, 2, 4);
-      ctx.fillStyle = "#eee";
-      ctx.fillRect(sx + 9, sy + 12, 2, 2);
-      ctx.fillRect(sx + 24, sy + 13, 2, 2);
+      // 枝: 1本の主線から2〜3本の分岐。木全体にはしない。
+      gline(sx, sy, [8, 26, 24, 9], 2);
+      gline(sx, sy, [14, 19, 19, 17], 2);
+      gline(sx, sy, [18, 14, 14, 11], 2);
+      gline(sx, sy, [21, 12, 26, 13], 2);
       return;
     }
     if (resourceType === Resource.STONE) {
-      ctx.fillStyle = "#111";
-      ctx.fillRect(sx + 10, sy + 20, 18, 7);
-      ctx.fillRect(sx + 13, sy + 14, 14, 8);
-      ctx.fillRect(sx + 17, sy + 10, 8, 5);
-      ctx.fillRect(sx + 8, sy + 24, 22, 3);
-      ctx.fillStyle = "#eeeeee";
-      ctx.fillRect(sx + 12, sy + 20, 14, 5);
-      ctx.fillRect(sx + 14, sy + 15, 11, 6);
-      ctx.fillRect(sx + 18, sy + 11, 5, 4);
-      ctx.fillStyle = "#777";
-      ctx.fillRect(sx + 12, sy + 24, 16, 3);
-      ctx.fillRect(sx + 21, sy + 15, 5, 7);
-      ctx.fillRect(sx + 15, sy + 21, 8, 2);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx + 15, sy + 16, 5, 2);
-      ctx.fillRect(sx + 18, sy + 12, 4, 1);
+      // 石: 丸みのある不規則な塊 + 割れ目2〜3本。
+      gline(sx, sy, [9, 24, 8, 17, 13, 12, 19, 12, 25, 16, 25, 23, 19, 27, 12, 26], 2, true);
+      gline(sx, sy, [13, 16, 16, 20, 21, 19], 1.5);
+      gline(sx, sy, [16, 20, 15, 25], 1.5);
+      return;
     }
     if (resourceType === Resource.FLINT) {
-      ctx.fillStyle = "#111";
-      ctx.fillRect(sx + 16, sy + 10, 4, 3);
-      ctx.fillRect(sx + 13, sy + 13, 10, 4);
-      ctx.fillRect(sx + 10, sy + 17, 16, 4);
-      ctx.fillRect(sx + 12, sy + 21, 13, 3);
-      ctx.fillRect(sx + 15, sy + 24, 7, 3);
-      ctx.fillStyle = "#999";
-      ctx.fillRect(sx + 17, sy + 11, 2, 2);
-      ctx.fillRect(sx + 14, sy + 14, 7, 3);
-      ctx.fillRect(sx + 11, sy + 18, 10, 3);
-      ctx.fillStyle = "#ddd";
-      ctx.fillRect(sx + 17, sy + 14, 3, 1);
-      ctx.fillRect(sx + 12, sy + 19, 5, 1);
+      // フリント: 鋭い石片。縦長・尖鋭で希少感を出す。
+      gline(sx, sy, [16, 8, 23, 16, 20, 26, 12, 25, 10, 15], 2, true);
+      gline(sx, sy, [16, 8, 16, 21], 1.5);
+      gline(sx, sy, [16, 16, 21, 18], 1.5);
+      return;
+    }
+    if (resourceType === Resource.LEATHER) {
+      // 革: 柔らかい不定形の皮片。硬く見せず有機的な輪郭に。
+      gline(sx, sy, [10, 13, 18, 9, 25, 14, 23, 22, 15, 26, 8, 20], 2, true);
+      gline(sx, sy, [14, 15, 19, 20], 1.5);
+      return;
     }
   }
 
@@ -3212,126 +3240,98 @@
     if (base.type === "CAMP") {
       drawCamp(sx, sy, lv);
     } else {
-      ctx.fillStyle = "#111";
-      ctx.fillRect(sx + 4, sy + 24, 24, 4);
-      ctx.fillRect(sx + 7, sy + 20, 19, 4);
-      ctx.fillRect(sx + 10, sy + 15, 13, 5);
-      ctx.fillRect(sx + 15, sy + 8, 4, 7);
-      ctx.fillRect(sx + 2, sy + 28, 28, 2);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx + 14, sy + 21, 6, 6);
-      ctx.fillRect(sx + 16, sy + 10, 1, 5);
-      ctx.fillStyle = "#777";
-      ctx.fillRect(sx + 8, sy + 24, 17, 1);
+      // BASE: 三角屋根の小屋。CAMP より一回り大きく本拠感を出す。
+      gline(sx, sy, [5, 16, 16, 6, 27, 16], 2);          // 屋根
+      gline(sx, sy, [8, 16, 8, 28, 24, 28, 24, 16], 2);  // 壁
+      gline(sx, sy, [13, 28, 13, 21, 19, 21, 19, 28], 2); // 入口
     }
     if (lv >= 2) {
       const label = `L${lv}`;
       const lw = measurePixelText(label) + 2;
-      ctx.fillStyle = "#111";
+      ctx.fillStyle = "#161616";
       ctx.fillRect(sx + 1, sy + 1, lw + 2, 9);
       drawPixelTextScaled(label, sx + 2, sy + 2, 1, "#fff");
     }
     if (manhattanDistance(state.player.gridX, state.player.gridY, base.x, base.y) <= 1) {
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx, sy, TILE_SIZE, 2);
-      ctx.fillRect(sx, sy + TILE_SIZE - 2, TILE_SIZE, 2);
-      ctx.fillRect(sx, sy, 2, TILE_SIZE);
-      ctx.fillRect(sx + TILE_SIZE - 2, sy, 2, TILE_SIZE);
+      // 隣接時の選択枠（白地に映える黒の二重枠）
+      ctx.strokeStyle = GLYPH;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx + 1, sy + 1, TILE_SIZE - 2, TILE_SIZE - 2);
     }
   }
 
   function drawCamp(sx, sy, level = 1) {
     if (level >= 3) {
-      // 集落風 — 母屋 + 2つの小屋
-      ctx.fillStyle = "#111";
-      ctx.fillRect(sx + 9, sy + 12, 14, 14);   // 母屋
-      ctx.fillRect(sx + 8, sy + 10, 16, 3);     // 棟
-      ctx.fillRect(sx + 2, sy + 20, 8, 8);      // 左の小屋
-      ctx.fillRect(sx + 22, sy + 20, 8, 8);     // 右の小屋
-      ctx.fillRect(sx + 1, sy + 28, 30, 2);     // 地面
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx + 14, sy + 19, 4, 7);     // 母屋の入口
-      ctx.fillRect(sx + 4, sy + 23, 3, 5);
-      ctx.fillRect(sx + 25, sy + 23, 3, 5);
-      ctx.fillStyle = "#555";
-      ctx.fillRect(sx + 10, sy + 16, 12, 1);
+      // 集落風: 母屋テント + 左の小屋 + 柵で発展を示す。
+      gline(sx, sy, [9, 26, 17, 11, 25, 26], 2);          // 母屋
+      gline(sx, sy, [14, 26, 17, 18, 20, 26], 2);         // 入口
+      gline(sx, sy, [2, 27, 6, 20, 10, 27], 2);           // 左の小屋
+      gline(sx, sy, [26, 27, 29, 22, 30, 27], 2);         // 右の小屋
+      gline(sx, sy, [1, 29, 31, 29], 1.5);                // 地面/柵土台
       return;
     }
     if (level >= 2) {
-      // 少し大きい小屋
-      ctx.fillStyle = "#111";
-      ctx.fillRect(sx + 6, sy + 25, 20, 5);
-      ctx.fillRect(sx + 8, sy + 20, 16, 5);
-      ctx.fillRect(sx + 11, sy + 14, 10, 6);
-      ctx.fillRect(sx + 14, sy + 9, 4, 5);
-      ctx.fillRect(sx + 4, sy + 30, 24, 2);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx + 14, sy + 21, 5, 6);
-      ctx.fillStyle = "#555";
-      ctx.fillRect(sx + 9, sy + 25, 14, 1);
+      // 少し大きいテント + 棟線 + 入口
+      gline(sx, sy, [6, 27, 16, 10, 26, 27], 2);          // 外形
+      gline(sx, sy, [16, 10, 16, 27], 2);                 // 棟
+      gline(sx, sy, [13, 27, 16, 19, 19, 27], 2);         // 入口
       return;
     }
-    // Lv1: Smaller hut — lean-to shape
-    ctx.fillStyle = "#111";
-    ctx.fillRect(sx + 8, sy + 26, 16, 4);
-    ctx.fillRect(sx + 10, sy + 22, 12, 4);
-    ctx.fillRect(sx + 13, sy + 17, 7, 5);
-    ctx.fillRect(sx + 15, sy + 13, 3, 4);
-    ctx.fillRect(sx + 6, sy + 30, 20, 2);
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(sx + 15, sy + 23, 4, 4);
-    ctx.fillStyle = "#555";
-    ctx.fillRect(sx + 10, sy + 26, 10, 1);
+    // Lv1: 簡素なテント
+    gline(sx, sy, [8, 26, 16, 12, 24, 26], 2);            // テント外形
+    gline(sx, sy, [6, 26, 26, 26], 2);                    // 地面
+    gline(sx, sy, [16, 12, 16, 26], 1.5);                 // 中央のポール
   }
 
   function drawRelic(relic, cameraX, cameraY) {
     const sx = Math.floor(relic.x * TILE_SIZE - cameraX);
     const sy = Math.floor(relic.y * TILE_SIZE - cameraY);
-    ctx.fillStyle = "#111";
-    ctx.fillRect(sx + 9, sy + 9, 7, 7);
-    ctx.fillRect(sx + 19, sy + 9, 5, 8);
-    ctx.fillRect(sx + 14, sy + 16, 8, 7);
-    ctx.fillRect(sx + 8, sy + 23, 9, 4);
-    ctx.fillRect(sx + 20, sy + 24, 7, 3);
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(sx + 10, sy + 10, 2, 2);
-    ctx.fillRect(sx + 20, sy + 10, 1, 3);
+    // 遺品: 積み石（ケルン）。死体ではなく「残された物」の記号。
+    gcircle(sx, sy, 16, 24, 4, 2);
+    gcircle(sx, sy, 13, 18, 3.5, 2);
+    gcircle(sx, sy, 20, 18, 3.5, 2);
+    gcircle(sx, sy, 16, 13, 3, 2);
   }
 
   function drawAnimal(animal, cameraX, cameraY) {
     const sx = Math.floor(animal.x * TILE_SIZE - cameraX);
     const sy = Math.floor(animal.y * TILE_SIZE - cameraY);
     const boar = animal.type === "boar";
-    ctx.fillStyle = "#111";
     if (boar) {
-      ctx.fillRect(sx + 5, sy + 15, 19, 10);
-      ctx.fillRect(sx + 21, sy + 12, 8, 7);
-      ctx.fillRect(sx + 7, sy + 25, 4, 5);
-      ctx.fillRect(sx + 19, sy + 25, 4, 5);
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(sx + 25, sy + 14, 2, 2);
-      ctx.fillRect(sx + 27, sy + 19, 3, 1);
+      // 猪: 重く大きい胴体 + 突き出た鼻先 + 牙。鹿/兎と別シルエット。
+      gline(sx, sy, [6, 24, 6, 17, 11, 13, 20, 13, 24, 16, 28, 17, 27, 21, 24, 23, 24, 24], 2, true);
+      gline(sx, sy, [27, 20, 30, 22], 2);                 // 牙
+      gline(sx, sy, [11, 11, 13, 14], 2);                 // 耳
+      gline(sx, sy, [10, 24, 10, 29], 2);                 // 脚
+      gline(sx, sy, [16, 24, 16, 29], 2);
+      gline(sx, sy, [22, 24, 22, 29], 2);
+      gdot(sx, sy, 24, 17, 1.1);                          // 目
       return;
     }
-    ctx.fillRect(sx + 8, sy + 17, 15, 8);
-    ctx.fillRect(sx + 21, sy + 12, 6, 6);
-    ctx.fillRect(sx + 24, sy + 6, 2, 7);
-    ctx.fillRect(sx + 19, sy + 8, 2, 5);
-    ctx.fillRect(sx + 9, sy + 25, 4, 4);
-    ctx.fillRect(sx + 20, sy + 24, 4, 5);
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(sx + 24, sy + 13, 1, 1);
+    // 兎: 小さく軽い体 + 長い耳。
+    gcircle(sx, sy, 13, 20, 5, 2);                        // 胴
+    gcircle(sx, sy, 21, 17, 3.5, 2);                      // 頭
+    gline(sx, sy, [20, 14, 18, 7], 2);                    // 耳
+    gline(sx, sy, [23, 14, 23, 7], 2);                    // 耳
+    gline(sx, sy, [10, 24, 10, 28], 2);                   // 脚
+    gline(sx, sy, [15, 24, 15, 28], 2);
+    gdot(sx, sy, 22, 17, 1.1);                            // 目
   }
 
   function drawMonolith(monolith, cameraX, cameraY) {
     const sx = Math.floor(monolith.x * TILE_SIZE - cameraX);
     const sy = Math.floor(monolith.y * TILE_SIZE - cameraY);
-    ctx.fillStyle = "#111";
-    ctx.fillRect(sx + 13, sy + 3, 11, 26);
-    ctx.fillRect(sx + 11, sy + 29, 16, 3);
-    ctx.fillRect(sx + 15, sy, 7, 3);
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(sx + 18, sy + 7, 1, 8);
+    // ゴールの黒石: 塗りで強く存在感を出しつつ線画文法に合わせる。
+    ctx.fillStyle = GLYPH;
+    ctx.beginPath();
+    ctx.moveTo(sx + 14, sy + 3);
+    ctx.lineTo(sx + 21, sy + 4);
+    ctx.lineTo(sx + 23, sy + 29);
+    ctx.lineTo(sx + 12, sy + 29);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#f5f5f5";
+    ctx.fillRect(sx + 18, sy + 8, 1, 10);
   }
 
   function drawPlayer(p, cameraX, cameraY) {
@@ -3352,50 +3352,53 @@
     const ox = Math.round(dirX);
     const oy = Math.round(dirY);
     const stage = state ? state.evolutionStage || 0 : 0;
-    targetCtx.fillStyle = "#111";
+    targetCtx.strokeStyle = GLYPH;
+    targetCtx.lineWidth = 2;
+    targetCtx.lineJoin = "round";
+    targetCtx.lineCap = "round";
+    const line = (pts) => {
+      targetCtx.beginPath();
+      for (let i = 0; i < pts.length; i += 2) {
+        if (i === 0) targetCtx.moveTo(x + pts[i], y + pts[i + 1]);
+        else targetCtx.lineTo(x + pts[i], y + pts[i + 1]);
+      }
+      targetCtx.stroke();
+    };
+    const head = (hx, hy, r) => {
+      targetCtx.beginPath();
+      targetCtx.arc(x + hx, y + hy, r, 0, Math.PI * 2);
+      targetCtx.fillStyle = GLYPH;
+      targetCtx.fill();
+    };
     if (stage === 0) {
-      targetCtx.fillRect(x - 8, y - 4, 6, 5);
-      targetCtx.fillRect(x - 2, y - 1, 11, 5);
-      targetCtx.fillRect(x + 7, y - 4, 4, 6);
-      targetCtx.fillRect(x - 10, y + 4, 6, 3);
-      targetCtx.fillRect(x + 1, y + 6, 8, 3);
-      targetCtx.fillRect(x - 6, y, 3, 6);
-      targetCtx.fillRect(x + 10, y + 1, 3, 5);
-      targetCtx.fillStyle = "#fff";
-      targetCtx.fillRect(x - 6, y - 3, 3, 2);
-      targetCtx.fillRect(x, y, 4, 1);
-      targetCtx.fillRect(x + 8, y - 3, 1, 1);
+      // 前傾の原始的な人型: 背を丸め長い腕。
+      head(-4, -6, 3);
+      line([-3, -4, 6, 2]);        // 背
+      line([-1, -2, -7, 6]);       // 前腕（長い）
+      line([5, 0, 11, 7]);         // 後腕（長い）
+      line([5, 2, 2, 12]);         // 脚
+      line([6, 2, 9, 12]);         // 脚
     } else if (stage === 1) {
-      targetCtx.fillRect(x - 5, y - 10, 8, 7);
-      targetCtx.fillRect(x - 4, y - 4, 8, 11);
-      targetCtx.fillRect(x - 9, y - 1, 5, 3);
-      targetCtx.fillRect(x + 4, y + 1, 7, 3);
-      targetCtx.fillRect(x - 5, y + 7, 4, 5);
-      targetCtx.fillRect(x + 4, y + 6, 4, 6);
-      targetCtx.fillRect(x - 6, y + 11, 6, 2);
-      targetCtx.fillRect(x + 4, y + 11, 6, 2);
-      targetCtx.fillStyle = "#fff";
-      targetCtx.fillRect(x - 4, y - 9, 3, 4);
-      targetCtx.fillRect(x - 1, y - 2, 4, 7);
-      targetCtx.fillRect(x + 2, y + 5, 1, 3);
+      // 直立した人型。
+      head(0, -8, 3);
+      line([0, -5, 0, 4]);         // 胴
+      line([-6, -1, 6, -1]);       // 腕
+      line([0, 4, -4, 12]);        // 脚
+      line([0, 4, 4, 12]);         // 脚
     } else {
-      targetCtx.fillRect(x - 5, y - 11, 9, 7);
-      targetCtx.fillRect(x - 4, y - 4, 8, 13);
-      targetCtx.fillRect(x - 10, y - 1, 6, 3);
-      targetCtx.fillRect(x + 4, y, 7, 3);
-      targetCtx.fillRect(x - 4, y + 9, 4, 7);
-      targetCtx.fillRect(x + 4, y + 9, 4, 7);
-      targetCtx.fillRect(x - 6, y + 15, 7, 2);
-      targetCtx.fillRect(x + 4, y + 15, 7, 2);
-      targetCtx.fillRect(x + 9, y - 9, 3, 12);
-      targetCtx.fillStyle = "#fff";
-      targetCtx.fillRect(x - 3, y - 10, 4, 5);
-      targetCtx.fillRect(x - 1, y - 3, 4, 8);
-      targetCtx.fillRect(x + 9, y - 7, 1, 4);
-      targetCtx.fillRect(x + 1, y + 6, 1, 3);
+      // 直立 + 杖を持つ進化形。
+      head(0, -10, 3);
+      line([0, -7, 0, 3]);         // 胴
+      line([-6, -3, 6, -3]);       // 腕
+      line([0, 3, -4, 12]);        // 脚
+      line([0, 3, 4, 12]);         // 脚
+      line([8, -11, 8, 5]);        // 杖
     }
-    targetCtx.fillStyle = "#111";
-    targetCtx.fillRect(x + ox * 2, y - 8 + oy * 2, 2, 2);
+    // 向きを示す小さな点
+    targetCtx.fillStyle = GLYPH;
+    targetCtx.beginPath();
+    targetCtx.arc(x + ox * 5, y - 8 + oy * 5, 1.6, 0, Math.PI * 2);
+    targetCtx.fill();
   }
 
   function drawDirectionMarkers(cameraX, cameraY) {
@@ -3417,10 +3420,19 @@
     const dy = screenY - cy;
     const edgeX = Math.max(GAME_X + 4, Math.min(GAME_X + PLAY_W - 5, cx + dx * Math.min((PLAY_W / 2 - 5) / Math.max(1, Math.abs(dx)), (PLAY_H / 2 - 5) / Math.max(1, Math.abs(dy)))));
     const edgeY = Math.max(GAME_Y + 4, Math.min(GAME_Y + PLAY_H - 5, cy + dy * Math.min((PLAY_W / 2 - 5) / Math.max(1, Math.abs(dx)), (PLAY_H / 2 - 5) / Math.max(1, Math.abs(dy)))));
-    ctx.fillStyle = target.kind === "base" ? "#fff" : "#111";
-    ctx.fillRect(Math.floor(edgeX) - 2, Math.floor(edgeY) - 2, 5, 5);
-    ctx.fillStyle = target.kind === "base" ? "#111" : "#fff";
-    ctx.fillRect(Math.floor(edgeX), Math.floor(edgeY), 1, 1);
+    // 白地でも見えるよう全マーカーを黒に。拠点は中抜き、その他は中心点で区別。
+    const ex = Math.floor(edgeX);
+    const ey = Math.floor(edgeY);
+    if (target.kind === "base") {
+      ctx.strokeStyle = GLYPH;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(ex - 2, ey - 2, 5, 5);
+    } else {
+      ctx.fillStyle = GLYPH;
+      ctx.fillRect(ex - 2, ey - 2, 5, 5);
+      ctx.fillStyle = "#f5f5f5";
+      ctx.fillRect(ex, ey, 1, 1);
+    }
   }
 
   function drawPixelPerson(targetCtx, x, y, face, scale) {
@@ -3886,6 +3898,10 @@
     const storeText = storeParts.join(" ");
     const storeW = measurePixelText(storeText) * 2;
     drawPixelTextScaled(storeText, GAME_X + PLAY_W - storeW - 10, 8, 2, "#fff");
+    if (state.debugImmortal) {
+      const tag = "IMMORTAL";
+      drawPixelTextScaled(tag, GAME_X + Math.floor((PLAY_W - measurePixelText(tag) * 2) / 2), 8, 2, "#f80");
+    }
     const p = state.player;
     drawUiGauge("HP", Math.max(0, p.hp) / 100, GAME_X + 10, HUD_Y + 10, 96);
     const cap = getPlayerCapacity();
@@ -4188,23 +4204,92 @@
     }
   }
 
+  // 色を使わず、形と文字でカーソル状態を表す（モノクロ統一）。
+  function drawCampCursor(csx, csy, status) {
+    const S = TILE_SIZE;
+    ctx.fillStyle = GLYPH;
+    const solidFrame = (inset, thick) => {
+      ctx.fillRect(csx + inset, csy + inset, S - inset * 2, thick);
+      ctx.fillRect(csx + inset, csy + S - inset - thick, S - inset * 2, thick);
+      ctx.fillRect(csx + inset, csy + inset, thick, S - inset * 2);
+      ctx.fillRect(csx + S - inset - thick, csy + inset, thick, S - inset * 2);
+    };
+    const dottedFrame = (inset, step, dot) => {
+      for (let x = inset; x <= S - inset - dot; x += step) {
+        ctx.fillRect(csx + x, csy + inset, dot, dot);
+        ctx.fillRect(csx + x, csy + S - inset - dot, dot, dot);
+      }
+      for (let y = inset; y <= S - inset - dot; y += step) {
+        ctx.fillRect(csx + inset, csy + y, dot, dot);
+        ctx.fillRect(csx + S - inset - dot, csy + y, dot, dot);
+      }
+    };
+    const crossX = () => {
+      for (let i = 4; i < S - 4; i += 1) {
+        ctx.fillRect(csx + i, csy + i, 2, 2);
+        ctx.fillRect(csx + i, csy + S - 2 - i, 2, 2);
+      }
+    };
+    const diagSlash = () => {
+      for (let i = 4; i < S - 4; i += 1) {
+        ctx.fillRect(csx + i, csy + S - 2 - i, 2, 2);
+      }
+    };
+    if (status === "ok") {
+      // 設置可能: 二重枠 + プレビュー
+      solidFrame(0, 2);
+      solidFrame(5, 2);
+      drawCamp(csx, csy, 1);
+    } else if (status === "unexplored") {
+      // 未踏エリア: 点線枠 + "?"
+      dottedFrame(1, 6, 2);
+      drawPixelTextScaled("?", csx + 11, csy + 11, 2, GLYPH);
+    } else if (status === "tooClose") {
+      // 近すぎ: ×印
+      solidFrame(0, 1);
+      crossX();
+    } else if (status === "tooFar") {
+      // 遠すぎ: 薄い点線枠（まばらな点）
+      dottedFrame(1, 11, 2);
+    } else {
+      // 地形NG: 斜線
+      solidFrame(0, 1);
+      diagSlash();
+    }
+  }
+
   function drawCampRangeIndicators(cameraX, cameraY) {
-    // 各拠点について、近接禁止範囲(赤)と建設可能範囲(灰)を点線で描く
-    const drawRing = (base, radius, color) => {
-      ctx.fillStyle = color;
-      for (let angle = 0; angle < 360; angle += 3) {
+    // 色を使わず、最大距離=点線 / 近接禁止=まばらな×印 で表す。
+    // 画面内かつ既踏のタイルだけ描画する。
+    ctx.fillStyle = GLYPH;
+    const ringTiles = (base, radius, step) => {
+      const out = [];
+      for (let angle = 0; angle < 360; angle += step) {
         const rad = (angle * Math.PI) / 180;
         const tx = Math.round(base.x + Math.cos(rad) * radius);
         const ty = Math.round(base.y + Math.sin(rad) * radius);
         if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
+        if (!isSeenTile(tx, ty)) continue; // 未踏エリアは表示しない
+        out.push({ tx, ty });
+      }
+      return out;
+    };
+    for (const base of state.bases) {
+      // 最大距離境界: 点線
+      for (const { tx, ty } of ringTiles(base, campPlaceMaxForBase(base), 3)) {
         const sx = Math.floor(tx * TILE_SIZE - cameraX) + TILE_SIZE / 2 - 1;
         const sy = Math.floor(ty * TILE_SIZE - cameraY) + TILE_SIZE / 2 - 1;
         ctx.fillRect(sx, sy, 2, 2);
       }
-    };
-    for (const base of state.bases) {
-      drawRing(base, MIN_CAMP_DISTANCE, "#a33");          // 近すぎ
-      drawRing(base, campPlaceMaxForBase(base), "#666");  // 建設可能上限
+      // 近接禁止範囲: 小さい×印をまばらに
+      for (const { tx, ty } of ringTiles(base, MIN_CAMP_DISTANCE, 30)) {
+        const sx = Math.floor(tx * TILE_SIZE - cameraX) + TILE_SIZE / 2;
+        const sy = Math.floor(ty * TILE_SIZE - cameraY) + TILE_SIZE / 2;
+        for (let i = -2; i <= 2; i += 1) {
+          ctx.fillRect(sx + i - 1, sy + i - 1, 2, 2);
+          ctx.fillRect(sx + i - 1, sy - i - 1, 2, 2);
+        }
+      }
     }
   }
 
@@ -4287,7 +4372,8 @@
   }
 
   function getSystemMenuOptions() {
-    return ["SAVE AUTO", "LOAD TITLE", "RESET SAVE", "[DEBUG] UNLOCK ALL", "[DEBUG] ADD RESOURCES", "[DEBUG] POP +5"];
+    const immortal = state && state.debugImmortal ? "ON" : "OFF";
+    return ["SAVE AUTO", "LOAD TITLE", "RESET SAVE", "[DEBUG] UNLOCK ALL", "[DEBUG] ADD RESOURCES", "[DEBUG] POP +5", `[DEBUG] IMMORTAL: ${immortal}`];
   }
 
   function moveSystemMenuSelection(delta) {
@@ -4315,7 +4401,20 @@
       debugAddResources();
     } else if (selected === "[DEBUG] POP +5") {
       debugPopPlus5();
+    } else if (selected.startsWith("[DEBUG] IMMORTAL")) {
+      debugToggleImmortal();
     }
+  }
+
+  function debugToggleImmortal() {
+    state.debugImmortal = !state.debugImmortal;
+    if (state.debugImmortal) {
+      if (state.player) state.player.hp = 100;
+      addLog("IMMORTAL ON");
+    } else {
+      addLog("IMMORTAL OFF");
+    }
+    // メニューは開いたまま残し、トグル状態を即確認できるようにする。
   }
 
   function debugUnlockAll() {

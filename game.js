@@ -61,6 +61,11 @@
   const RESOURCE_FRUIT_CHANCE = 0.38;
   const RESOURCE_WOOD_CHANCE = 0.14;
   const RESOURCE_STONE_CHANCE = 0.14;
+  // 地形ごとの資源出現率（1地形=1資源）
+  const RESOURCE_SMALL_FOREST_FRUIT = 0.24;   // 小さい森: 果物のみ
+  const RESOURCE_DEEP_FOREST_WOOD = 0.32;     // 大きい森: 枝/木のみ
+  const RESOURCE_MOUNTAIN_STONE = 0.22;       // 普通の山: 石のみ
+  const RESOURCE_HIGH_MOUNTAIN_FLINT = 0.26;  // 高い山: フリントのみ
   const ACTION_DIRS = [
     [0, 0],
     [0, -1],
@@ -71,15 +76,24 @@
   const Tile = {
     SEA: 0,
     GRASS: 1,
-    FOREST: 2,
-    MOUNTAIN: 3,
+    FOREST: 2,        // 小さい森（果物）。既存セーブ互換のため値は据え置き。
+    MOUNTAIN: 3,      // 普通の山（石）。既存セーブ互換のため値は据え置き。
     MONOLITH: 4,
+    DEEP_FOREST: 5,   // 大きい森（枝/木）
+    HIGH_MOUNTAIN: 6, // 高い山（フリント）
   };
+
+  // 地形種別ヘルパー（新タイルを既存判定に取り込むため）
+  function isForestTile(t) { return t === Tile.FOREST || t === Tile.DEEP_FOREST; }
+  function isMountainTile(t) { return t === Tile.MOUNTAIN || t === Tile.HIGH_MOUNTAIN; }
+  function isBuildableTile(t) { return t === Tile.GRASS || isForestTile(t); }
 
   const TERRAIN_HP_COST = {
     [Tile.GRASS]: { hp: 1, every: 2 },
     [Tile.FOREST]: { hp: 1, every: 1 },
+    [Tile.DEEP_FOREST]: { hp: 1, every: 1 },
     [Tile.MOUNTAIN]: { hp: 3, every: 1 },
+    [Tile.HIGH_MOUNTAIN]: { hp: 4, every: 1 },
     [Tile.SEA]: { hp: 20, every: 1 },
     [Tile.MONOLITH]: { hp: 1, every: 2 },
   };
@@ -115,8 +129,10 @@
   const tileInfo = {
     [Tile.SEA]: { name: "海", color: "#111111", dark: "#777", passable: true },
     [Tile.GRASS]: { name: "草原", color: "#eeeeee", dark: "#aaa", passable: true },
-    [Tile.FOREST]: { name: "森", color: "#dddddd", dark: "#111", passable: true },
+    [Tile.FOREST]: { name: "小さい森", color: "#dddddd", dark: "#111", passable: true },
+    [Tile.DEEP_FOREST]: { name: "大きい森", color: "#b9b9b9", dark: "#000", passable: true },
     [Tile.MOUNTAIN]: { name: "山", color: "#cfcfcf", dark: "#333", passable: true },
+    [Tile.HIGH_MOUNTAIN]: { name: "高い山", color: "#e9e9e9", dark: "#222", passable: true },
     [Tile.MONOLITH]: { name: "黒石", color: "#d8d8d8", dark: "#111", passable: true },
   };
 
@@ -395,9 +411,16 @@
         else {
           const n = seededNoise(x * 3 + 9, y * 5 + 2);
           const centerRidge = Math.hypot((x - cx) / 28, (y - cy) / 24);
-          if (centerRidge < 1.1 || (n > 0.78 && distance < 0.68)) row.push(Tile.MOUNTAIN);
-          else if (n > 0.42) row.push(Tile.FOREST);
-          else row.push(Tile.GRASS);
+          const isMountain = centerRidge < 1.1 || (n > 0.78 && distance < 0.68);
+          if (isMountain) {
+            // 山地帯の中心/標高が高い部分 → 高い山、外縁/低い部分 → 普通の山
+            if (centerRidge < 0.72 || n > 0.9) row.push(Tile.HIGH_MOUNTAIN);
+            else row.push(Tile.MOUNTAIN);
+          } else if (n > 0.42) {
+            // 森地帯の中心/濃い部分 → 大きい森、外縁/薄い部分 → 小さい森
+            if (n > 0.62) row.push(Tile.DEEP_FOREST);
+            else row.push(Tile.FOREST);
+          } else row.push(Tile.GRASS);
         }
       }
       tiles.push(row);
@@ -427,16 +450,17 @@
         const tile = map[y][x];
         const key = `${x},${y}`;
         const n = seededNoise(x * 17 + 3, y * 19 + 11);
+        // 1地形=1資源。山で石/フリント、森で果物/枝が混ざらないようにする。
         if (tile === Tile.GRASS && hasNeighborTile(map, x, y, Tile.FOREST) && n < RESOURCE_FRUIT_CHANCE) {
-          resources[key] = makeResourceNode(Resource.FRUIT);
-        } else if (tile === Tile.FOREST && n < RESOURCE_FRUIT_CHANCE * 0.35) {
-          resources[key] = makeResourceNode(Resource.FRUIT);
-        } else if (tile === Tile.FOREST && n < RESOURCE_FRUIT_CHANCE * 0.35 + RESOURCE_WOOD_CHANCE) {
-          resources[key] = makeResourceNode(Resource.WOOD);
-        } else if (tile === Tile.MOUNTAIN && n < RESOURCE_STONE_CHANCE * 0.7) {
-          resources[key] = makeResourceNode(Resource.STONE);
-        } else if (tile === Tile.MOUNTAIN && n < RESOURCE_STONE_CHANCE) {
-          resources[key] = makeResourceNode(Resource.FLINT);
+          resources[key] = makeResourceNode(Resource.FRUIT);          // 小さい森に隣接した草原: 果物
+        } else if (tile === Tile.FOREST && n < RESOURCE_SMALL_FOREST_FRUIT) {
+          resources[key] = makeResourceNode(Resource.FRUIT);          // 小さい森: 果物のみ
+        } else if (tile === Tile.DEEP_FOREST && n < RESOURCE_DEEP_FOREST_WOOD) {
+          resources[key] = makeResourceNode(Resource.WOOD);           // 大きい森: 枝/木のみ
+        } else if (tile === Tile.MOUNTAIN && n < RESOURCE_MOUNTAIN_STONE) {
+          resources[key] = makeResourceNode(Resource.STONE);          // 普通の山: 石のみ
+        } else if (tile === Tile.HIGH_MOUNTAIN && n < RESOURCE_HIGH_MOUNTAIN_FLINT) {
+          resources[key] = makeResourceNode(Resource.FLINT);          // 高い山: フリントのみ
         }
       }
     }
@@ -452,7 +476,7 @@
       const x = randomInt(2, MAP_W - 3);
       const y = randomInt(2, MAP_H - 3);
       const tile = map[y][x];
-      if (tile !== Tile.GRASS && tile !== Tile.FOREST) continue;
+      if (!isBuildableTile(tile)) continue;
       if (spawn && manhattanDistance(spawn.x, spawn.y, x, y) <= 8) continue;
       if (animals.some((animal) => animal.x === x && animal.y === y)) continue;
       const type = animalTypes[seededNoise(x * 23, y * 29) > 0.78 ? 1 : 0];
@@ -1258,7 +1282,7 @@
   function isAnimalTileAllowed(x, y) {
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return false;
     const tile = state.map[y][x];
-    if (tile !== Tile.GRASS && tile !== Tile.FOREST) return false;
+    if (!isBuildableTile(tile)) return false;
     if (state.bases.some((base) => manhattanDistance(base.x, base.y, x, y) <= 8)) return false;
     return true;
   }
@@ -1927,7 +1951,7 @@
       return false;
     }
     const tile = state.map[y][x];
-    if (tile !== Tile.GRASS && tile !== Tile.FOREST) {
+    if (!isBuildableTile(tile)) {
       addLog("ここには作れない");
       return false;
     }
@@ -1943,7 +1967,7 @@
     if (!state.placingCamp || !state.campCursor) return;
     const { x, y } = state.campCursor;
     const tile = state.map[y][x];
-    if (tile !== Tile.GRASS && tile !== Tile.FOREST) {
+    if (!isBuildableTile(tile)) {
       addLog("CANNOT BUILD HERE");
       return;
     }
@@ -2215,7 +2239,7 @@
       const csy = Math.floor(cy * TILE_SIZE - cameraY);
       const t = state.map[cy] && state.map[cy][cx];
       const outOfRange = !state.bases.some((b) => distance(b.x, b.y, cx, cy) <= CAMP_PLACE_RADIUS);
-      const invalid = (t !== Tile.GRASS && t !== Tile.FOREST) || state.bases.some((b) => b.x === cx && b.y === cy) || outOfRange;
+      const invalid = !isBuildableTile(t) || state.bases.some((b) => b.x === cx && b.y === cy) || outOfRange;
       ctx.fillStyle = invalid ? "#888" : "#fff";
       ctx.fillRect(csx, csy, TILE_SIZE, 2);
       ctx.fillRect(csx, csy + TILE_SIZE - 2, TILE_SIZE, 2);
@@ -2398,9 +2422,11 @@
   function currentBiomeName() {
     if (!state || !state.player) return "未知の地";
     const tile = state.map[state.player.gridY][state.player.gridX];
-    if (tile === Tile.FOREST) return "森林地帯";
+    if (tile === Tile.FOREST) return "小さい森";
+    if (tile === Tile.DEEP_FOREST) return "深い森";
     if (tile === Tile.GRASS) return "草原地帯";
     if (tile === Tile.MOUNTAIN) return "山岳地帯";
+    if (tile === Tile.HIGH_MOUNTAIN) return "高い山";
     if (tile === Tile.SEA) return "海辺";
     if (tile === Tile.MONOLITH) return "黒い石の前";
     return "未知の地";
@@ -2505,16 +2531,19 @@
 
     const icons = [
       { label: "GRASS", kind: "tile", tile: Tile.GRASS },
-      { label: "FOREST", kind: "tile", tile: Tile.FOREST },
+      { label: "SMALL FOREST", kind: "tile", tile: Tile.FOREST },
+      { label: "DENSE FOREST", kind: "tile", tile: Tile.DEEP_FOREST },
       { label: "MOUNTAIN", kind: "tile", tile: Tile.MOUNTAIN },
+      { label: "HIGH MOUNTAIN", kind: "tile", tile: Tile.HIGH_MOUNTAIN },
       { label: "SEA", kind: "tile", tile: Tile.SEA },
-      { label: "FRUIT", kind: "resource", resource: Resource.FRUIT, tile: Tile.GRASS },
-      { label: "WOOD", kind: "resource", resource: Resource.WOOD, tile: Tile.FOREST },
+      { label: "FRUIT", kind: "resource", resource: Resource.FRUIT, tile: Tile.FOREST },
+      { label: "WOOD", kind: "resource", resource: Resource.WOOD, tile: Tile.DEEP_FOREST },
       { label: "STONE", kind: "resource", resource: Resource.STONE, tile: Tile.MOUNTAIN },
+      { label: "FLINT", kind: "resource", resource: Resource.FLINT, tile: Tile.HIGH_MOUNTAIN },
       { label: "BASE", kind: "base", tile: Tile.GRASS },
       { label: "RELIC", kind: "relic", tile: Tile.GRASS },
       { label: "HARE", kind: "animal", animal: "hare", tile: Tile.GRASS },
-      { label: "BOAR", kind: "animal", animal: "boar", tile: Tile.FOREST },
+      { label: "BOAR", kind: "animal", animal: "boar", tile: Tile.DEEP_FOREST },
       { label: "PLAYER", kind: "player", tile: Tile.GRASS },
       { label: "MONOLITH", kind: "monolith", tile: Tile.MONOLITH },
       { label: "STAR", kind: "star", tile: Tile.GRASS },
@@ -2605,10 +2634,16 @@
       if (seededNoise(y, x) > 0.62) ctx.fillRect(sx + 22, sy + 10, 3, 1);
     }
     if (tile === Tile.FOREST) {
-      drawForestCluster(sx, sy, x, y);
+      drawSmallForest(sx, sy, x, y);
+    }
+    if (tile === Tile.DEEP_FOREST) {
+      drawDenseForest(sx, sy, x, y);
     }
     if (tile === Tile.MOUNTAIN) {
       drawMountainRange(sx, sy);
+    }
+    if (tile === Tile.HIGH_MOUNTAIN) {
+      drawHighMountain(sx, sy);
     }
     if (tile === Tile.SEA) {
       ctx.fillStyle = "#999";
@@ -2631,17 +2666,34 @@
     }
   }
 
-  function drawForestCluster(sx, sy, x, y) {
-    drawConifer(sx + 2, sy + 7, 13, "#888", "#555");
-    drawConifer(sx + 12, sy + 5, 15, "#999", "#666");
-    drawConifer(sx + 21, sy + 9, 12, "#888", "#555");
-    if (seededNoise(x, y) > 0.35) drawConifer(sx + 7, sy + 15, 12, "#777", "#555");
-    ctx.fillStyle = "#555";
-    ctx.fillRect(sx + 1, sy + 27, 30, 2);
+  // 小さい森: 低い木がまばら、明るめ/薄め。果物が採れる雰囲気。
+  function drawSmallForest(sx, sy, x, y) {
+    drawConifer(sx + 4, sy + 13, 9, "#bbb", "#888");
+    drawConifer(sx + 18, sy + 11, 10, "#cccccc", "#999");
+    if (seededNoise(x, y) > 0.55) drawConifer(sx + 11, sy + 16, 8, "#bbb", "#888");
+    // まばらな下草
     ctx.fillStyle = "#aaa";
-    ctx.fillRect(sx + 6, sy + 12, 4, 1);
-    ctx.fillRect(sx + 16, sy + 10, 5, 1);
-    ctx.fillRect(sx + 23, sy + 15, 3, 1);
+    ctx.fillRect(sx + 2, sy + 26, 5, 1);
+    ctx.fillRect(sx + 13, sy + 27, 6, 1);
+    ctx.fillRect(sx + 24, sy + 25, 5, 1);
+    ctx.fillStyle = "#ccc";
+    ctx.fillRect(sx + 8, sy + 22, 3, 1);
+    ctx.fillRect(sx + 22, sy + 20, 3, 1);
+  }
+
+  // 大きい森: 木が密集して濃い色。枝資源が採れそうな見た目。
+  function drawDenseForest(sx, sy, x, y) {
+    drawConifer(sx + 1, sy + 6, 14, "#666", "#333");
+    drawConifer(sx + 9, sy + 3, 17, "#777", "#3a3a3a");
+    drawConifer(sx + 18, sy + 5, 15, "#666", "#333");
+    drawConifer(sx + 24, sy + 8, 13, "#5a5a5a", "#2a2a2a");
+    drawConifer(sx + 6, sy + 13, 14, "#555", "#2a2a2a");
+    // 暗い林床と落ちた枝
+    ctx.fillStyle = "#2e2e2e";
+    ctx.fillRect(sx, sy + 27, 32, 3);
+    ctx.fillStyle = "#888";
+    ctx.fillRect(sx + 5, sy + 29, 7, 1);
+    ctx.fillRect(sx + 19, sy + 28, 8, 1);
   }
 
   function drawConifer(x, y, h, mid, dark) {
@@ -2681,6 +2733,36 @@
     ctx.fillStyle = "#aaa";
     ctx.fillRect(sx + 6, sy + 25, 8, 1);
     ctx.fillRect(sx + 14, sy + 22, 5, 1);
+  }
+
+  // 高い山: 尖った山頂、明るい/雪の頂点。フリント産地として分かる見た目。
+  function drawHighMountain(sx, sy) {
+    // 鋭い稜線を持つ高い山体
+    ctx.fillStyle = "#444";
+    ctx.fillRect(sx + 2, sy + 27, 28, 2);
+    ctx.fillRect(sx + 5, sy + 23, 22, 4);
+    ctx.fillRect(sx + 8, sy + 18, 16, 5);
+    ctx.fillRect(sx + 11, sy + 13, 10, 5);
+    ctx.fillRect(sx + 14, sy + 8, 5, 5);
+    ctx.fillRect(sx + 15, sy + 3, 3, 5);
+    // 左斜面の陰
+    ctx.fillStyle = "#666";
+    ctx.fillRect(sx + 4, sy + 24, 9, 3);
+    ctx.fillRect(sx + 8, sy + 19, 6, 4);
+    ctx.fillRect(sx + 11, sy + 14, 4, 4);
+    // 深い谷
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillRect(sx + 19, sy + 13, 3, 14);
+    ctx.fillRect(sx + 24, sy + 20, 3, 7);
+    // 雪の積もった尖頂
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(sx + 15, sy + 3, 3, 4);
+    ctx.fillRect(sx + 14, sy + 7, 5, 2);
+    ctx.fillRect(sx + 12, sy + 11, 4, 2);
+    ctx.fillRect(sx + 17, sy + 11, 3, 2);
+    ctx.fillStyle = "#e2e2e2";
+    ctx.fillRect(sx + 10, sy + 15, 3, 2);
+    ctx.fillRect(sx + 20, sy + 16, 3, 2);
   }
 
   function drawResourceObject(resourceType, sx, sy, x, y) {

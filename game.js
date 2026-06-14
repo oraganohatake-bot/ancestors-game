@@ -81,6 +81,7 @@
     MONOLITH: 4,
     DEEP_FOREST: 5,   // 大きい森（枝/木）
     HIGH_MOUNTAIN: 6, // 高い山（フリント）
+    RIVER: 7,         // 川（高山から海へ流れる水脈。森の目印）
   };
 
   // 地形種別ヘルパー（新タイルを既存判定に取り込むため）
@@ -94,6 +95,7 @@
     [Tile.DEEP_FOREST]: { hp: 1, every: 1 },
     [Tile.MOUNTAIN]: { hp: 3, every: 1 },
     [Tile.HIGH_MOUNTAIN]: { hp: 4, every: 1 },
+    [Tile.RIVER]: { hp: 2, every: 1 },
     [Tile.SEA]: { hp: 20, every: 1 },
     [Tile.MONOLITH]: { hp: 1, every: 2 },
   };
@@ -133,6 +135,7 @@
     [Tile.DEEP_FOREST]: { name: "大きい森", color: "#b9b9b9", dark: "#000", passable: true },
     [Tile.MOUNTAIN]: { name: "山", color: "#cfcfcf", dark: "#333", passable: true },
     [Tile.HIGH_MOUNTAIN]: { name: "高い山", color: "#e9e9e9", dark: "#222", passable: true },
+    [Tile.RIVER]: { name: "川", color: "#3a3a3a", dark: "#888", passable: true },
     [Tile.MONOLITH]: { name: "黒石", color: "#d8d8d8", dark: "#111", passable: true },
   };
 
@@ -396,36 +399,186 @@
     };
   }
 
+  // 補間つきバリューノイズ（seededNoise を格子点として双線形補間）。
+  function smoothNoise(x, y) {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = x - x0, fy = y - y0;
+    const sx = fx * fx * (3 - 2 * fx);
+    const sy = fy * fy * (3 - 2 * fy);
+    const v00 = seededNoise(x0, y0);
+    const v10 = seededNoise(x0 + 1, y0);
+    const v01 = seededNoise(x0, y0 + 1);
+    const v11 = seededNoise(x0 + 1, y0 + 1);
+    const top = v00 + (v10 - v00) * sx;
+    const bot = v01 + (v11 - v01) * sx;
+    return top + (bot - top) * sy;
+  }
+
+  // 複数オクターブを重ねたフラクタルノイズ（0..1）。
+  function fractalNoise(x, y, octaves) {
+    let total = 0, amp = 1, freq = 1, max = 0;
+    for (let o = 0; o < octaves; o += 1) {
+      total += smoothNoise(x * freq, y * freq) * amp;
+      max += amp;
+      amp *= 0.5;
+      freq *= 2;
+    }
+    return total / max;
+  }
+
+  // 環境シミュレーション型ワールド生成。
+  // 標高マップ → 海岸線 → 山岳/高山 → 川 → 森林 → の順で地形を決める。
+  // 「山があれば川、川があれば森」が予測できる連続した世界をつくる。
+  const RIVER_SOURCE_SPACING = 14; // 川の源（高山頂）同士の最小間隔
+  const RIVER_MAX_SOURCES = 16;
+  const RIVER_DENSE_DIST = 3;      // 川からこの距離まで → 大きい森
+  const RIVER_SMALL_DIST = 7;      // さらにこの距離まで → 小さい森
   function generateIslandMap() {
-    const tiles = [];
-    const cx = MAP_W / 2;
-    const cy = MAP_H / 2;
+    const cx = (MAP_W - 1) / 2;
+    const cy = (MAP_H - 1) / 2;
+    const maxDist = Math.hypot(cx, cy);
+
+    // 1) 標高マップ: 中心ほど高く外周ほど低い放射状の土台 + フラクタルノイズ。
+    const height = [];
+    let hMin = Infinity, hMax = -Infinity;
     for (let y = 0; y < MAP_H; y += 1) {
       const row = [];
       for (let x = 0; x < MAP_W; x += 1) {
-        const dx = (x - cx) / (MAP_W * 0.48);
-        const dy = (y - cy) / (MAP_H * 0.44);
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const noise = Math.sin(x * 0.33) * 0.09 + Math.cos(y * 0.27) * 0.08 + seededNoise(x, y) * 0.19;
-        if (distance + noise > 0.92) row.push(Tile.SEA);
-        else {
-          const n = seededNoise(x * 3 + 9, y * 5 + 2);
-          const centerRidge = Math.hypot((x - cx) / 28, (y - cy) / 24);
-          const isMountain = centerRidge < 1.1 || (n > 0.78 && distance < 0.68);
-          if (isMountain) {
-            // 山地帯の中心/標高が高い部分 → 高い山、外縁/低い部分 → 普通の山
-            if (centerRidge < 0.72 || n > 0.9) row.push(Tile.HIGH_MOUNTAIN);
-            else row.push(Tile.MOUNTAIN);
-          } else if (n > 0.42) {
-            // 森地帯の中心/濃い部分 → 大きい森、外縁/薄い部分 → 小さい森
-            if (n > 0.62) row.push(Tile.DEEP_FOREST);
-            else row.push(Tile.FOREST);
-          } else row.push(Tile.GRASS);
-        }
+        const d = Math.hypot(x - cx, y - cy) / maxDist; // 0(中心)..1(隅)
+        const h = (1 - d) * 0.68 + fractalNoise(x * 0.05, y * 0.05, 5) * 0.32;
+        row.push(h);
+        if (h < hMin) hMin = h;
+        if (h > hMax) hMax = h;
+      }
+      height.push(row);
+    }
+    const span = hMax - hMin || 1;
+    const flat = [];
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        height[y][x] = (height[y][x] - hMin) / span; // 0..1 に正規化
+        flat.push(height[y][x]);
+      }
+    }
+
+    // パーセンタイルで海面/山/高山の境界を決め、地形比率を安定させる。
+    flat.sort((a, b) => a - b);
+    const pct = (p) => flat[Math.min(flat.length - 1, Math.floor(p * flat.length))];
+    const seaLevel = pct(0.40);   // 下位40% → 海
+    const mtnLevel = pct(0.75);   // 上位25% → 山岳帯
+    const highLevel = pct(0.975); // 上位2.5% → 高山（山岳の約10%）
+
+    // 2) 標高で素地を分類（低地はあとで川との距離で森/平原に分ける）。
+    const tiles = [];
+    for (let y = 0; y < MAP_H; y += 1) {
+      const row = [];
+      for (let x = 0; x < MAP_W; x += 1) {
+        const h = height[y][x];
+        if (h < seaLevel) row.push(Tile.SEA);
+        else if (h >= highLevel) row.push(Tile.HIGH_MOUNTAIN);
+        else if (h >= mtnLevel) row.push(Tile.MOUNTAIN);
+        else row.push(Tile.GRASS); // 低地（仮）
       }
       tiles.push(row);
     }
-    tiles[Math.floor(cy)][Math.floor(cx)] = Tile.MONOLITH;
+
+    const N4 = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const N8 = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+
+    // 海岸線修正: 外洋とつながらない海（内陸の窪み）は低地に埋める。湖は今は作らない。
+    const ocean = new Set();
+    const oq = [];
+    const pushOcean = (x, y) => {
+      if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return;
+      const k = y * MAP_W + x;
+      if (tiles[y][x] === Tile.SEA && !ocean.has(k)) { ocean.add(k); oq.push([x, y]); }
+    };
+    for (let x = 0; x < MAP_W; x += 1) { pushOcean(x, 0); pushOcean(x, MAP_H - 1); }
+    for (let y = 0; y < MAP_H; y += 1) { pushOcean(0, y); pushOcean(MAP_W - 1, y); }
+    for (let i = 0; i < oq.length; i += 1) {
+      const [x, y] = oq[i];
+      for (const [dx, dy] of N4) pushOcean(x + dx, y + dy);
+    }
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (tiles[y][x] === Tile.SEA && !ocean.has(y * MAP_W + x)) tiles[y][x] = Tile.GRASS;
+      }
+    }
+
+    // 3) 高山の頂を間引いて川の源を選ぶ（互いに離す）。
+    const highs = [];
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (tiles[y][x] === Tile.HIGH_MOUNTAIN) highs.push({ x, y, h: height[y][x] });
+      }
+    }
+    highs.sort((a, b) => b.h - a.h);
+    const sources = [];
+    for (const c of highs) {
+      if (sources.every((s) => Math.hypot(c.x - s.x, c.y - s.y) > RIVER_SOURCE_SPACING)) sources.push(c);
+      if (sources.length >= RIVER_MAX_SOURCES) break;
+    }
+
+    // 4) 川生成: 各源から最急降下で海まで一本の連続した線を流す（途切れない）。
+    const isRiver = [];
+    for (let y = 0; y < MAP_H; y += 1) isRiver.push(new Array(MAP_W).fill(false));
+    for (const src of sources) {
+      let x = src.x, y = src.y;
+      const visited = new Set();
+      for (let step = 0; step < 800; step += 1) {
+        visited.add(y * MAP_W + x);
+        if (tiles[y][x] === Tile.SEA) break;
+        if (tiles[y][x] !== Tile.HIGH_MOUNTAIN) isRiver[y][x] = true; // 頂は山のまま残す
+        let best = null, bh = Infinity;
+        for (const [dx, dy] of N8) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+          if (visited.has(ny * MAP_W + nx)) continue;
+          if (height[ny][nx] < bh) { bh = height[ny][nx]; best = [nx, ny]; }
+        }
+        if (!best) break;
+        x = best[0]; y = best[1];
+        if (tiles[y][x] === Tile.SEA) break;
+      }
+    }
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (isRiver[y][x] && tiles[y][x] !== Tile.SEA) tiles[y][x] = Tile.RIVER;
+      }
+    }
+
+    // 5) 川からの距離をBFSで求める（海は通らない）。
+    const INF = 1e9;
+    const dist = [];
+    for (let y = 0; y < MAP_H; y += 1) dist.push(new Array(MAP_W).fill(INF));
+    const rq = [];
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (tiles[y][x] === Tile.RIVER) { dist[y][x] = 0; rq.push([x, y]); }
+      }
+    }
+    for (let i = 0; i < rq.length; i += 1) {
+      const [x, y] = rq[i];
+      for (const [dx, dy] of N4) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+        if (tiles[ny][nx] === Tile.SEA) continue;
+        if (dist[ny][nx] > dist[y][x] + 1) { dist[ny][nx] = dist[y][x] + 1; rq.push([nx, ny]); }
+      }
+    }
+
+    // 6) 森林: 低地を川からの距離で分類。近いほど濃い森。
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (tiles[y][x] !== Tile.GRASS) continue;
+        const rd = dist[y][x];
+        if (rd <= RIVER_DENSE_DIST) tiles[y][x] = Tile.DEEP_FOREST;
+        else if (rd <= RIVER_SMALL_DIST) tiles[y][x] = Tile.FOREST;
+        // それ以外は平原（GRASS）のまま
+      }
+    }
+
+    tiles[Math.round(cy)][Math.round(cx)] = Tile.MONOLITH; // 中心の頂＝黒石
     return tiles;
   }
 
@@ -464,7 +617,10 @@
         }
       }
     }
-    if (spawn) seedStarterFruit(resources, map, spawn);
+    if (spawn) {
+      seedStarterFruit(resources, map, spawn);
+      seedStarterStone(resources, map, spawn);
+    }
     return resources;
   }
 
@@ -530,16 +686,87 @@
     return s - Math.floor(s);
   }
 
+  // スポーン: 平原＋小規模森林地帯。果物（小さい森）が隣接し、石（山）も歩いて届く
+  // 麓寄りの平原を選ぶ。初期詰み防止。
   function findSpawn(map) {
+    const N4 = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    // 山までの距離をBFS
+    const INF = 1e9;
+    const mdist = [];
+    for (let y = 0; y < MAP_H; y += 1) mdist.push(new Array(MAP_W).fill(INF));
+    const q = [];
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (map[y][x] === Tile.MOUNTAIN || map[y][x] === Tile.HIGH_MOUNTAIN) { mdist[y][x] = 0; q.push([x, y]); }
+      }
+    }
+    for (let i = 0; i < q.length; i += 1) {
+      const [x, y] = q[i];
+      for (const [dx, dy] of N4) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+        if (map[ny][nx] === Tile.SEA) continue;
+        if (mdist[ny][nx] > mdist[y][x] + 1) { mdist[ny][nx] = mdist[y][x] + 1; q.push([nx, ny]); }
+      }
+    }
+    const cx = (MAP_W - 1) / 2;
+    const adjForest = (x, y) => N4.some(([dx, dy]) => {
+      const nx = x + dx, ny = y + dy;
+      return nx >= 0 && ny >= 0 && nx < MAP_W && ny < MAP_H && map[ny][nx] === Tile.FOREST;
+    });
+    let best = null, bestScore = Infinity;
+    for (let y = Math.floor(MAP_H * 0.55); y < Math.floor(MAP_H * 0.85); y += 1) {
+      for (let x = 15; x < MAP_W - 15; x += 1) {
+        if (map[y][x] !== Tile.GRASS || !adjForest(x, y)) continue;
+        const md = mdist[y][x];
+        if (md < 6 || md > 20) continue; // 山が近すぎず遠すぎず
+        const score = md + Math.abs(x - cx) * 0.15;
+        if (score < bestScore) { bestScore = score; best = { x, y }; }
+      }
+    }
+    if (best) return best;
+    // フォールバック: 通行可能な低地を中心付近から探す
     const center = { x: Math.floor(MAP_W / 2), y: Math.floor(MAP_H * 0.66) };
-    for (let radius = 0; radius < 30; radius += 1) {
+    for (let radius = 0; radius < 40; radius += 1) {
       for (let y = center.y - radius; y <= center.y + radius; y += 1) {
         for (let x = center.x - radius; x <= center.x + radius; x += 1) {
-          if (isPassableTile(map, x, y)) return { x, y };
+          if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
+          const t = map[y] && map[y][x];
+          if (t === Tile.GRASS || t === Tile.FOREST || t === Tile.DEEP_FOREST) return { x, y };
         }
       }
     }
     return center;
+  }
+
+  // スポーン近くに STONE を確保（山が近ければ山に、無ければ小さな岩場を作る）。
+  function seedStarterStone(resources, map, spawn) {
+    let placed = 0;
+    let nearest = null, nd = Infinity;
+    for (let y = Math.max(1, spawn.y - 20); y < Math.min(MAP_H - 1, spawn.y + 20) && placed < 3; y += 1) {
+      for (let x = Math.max(1, spawn.x - 20); x < Math.min(MAP_W - 1, spawn.x + 20) && placed < 3; x += 1) {
+        if (map[y][x] !== Tile.MOUNTAIN) continue;
+        const key = `${x},${y}`;
+        if (resources[key]) continue;
+        const d = manhattanDistance(spawn.x, spawn.y, x, y);
+        if (d <= 16) { resources[key] = makeResourceNode(Resource.STONE); placed += 1; }
+        if (d < nd) { nd = d; nearest = { x, y }; }
+      }
+    }
+    if (placed > 0) return;
+    if (nearest && nd <= 24) {
+      resources[`${nearest.x},${nearest.y}`] = makeResourceNode(Resource.STONE);
+      return;
+    }
+    // 近くに山が無い場合は小さな岩場を作って石を置く（初期詰み防止）。
+    const ox = Math.max(2, Math.min(MAP_W - 3, spawn.x + 4));
+    const oy = Math.max(2, Math.min(MAP_H - 3, spawn.y - 4));
+    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1]]) {
+      const x = ox + dx, y = oy + dy;
+      if (map[y][x] === Tile.SEA || map[y][x] === Tile.RIVER) continue;
+      map[y][x] = Tile.MOUNTAIN;
+      resources[`${x},${y}`] = makeResourceNode(Resource.STONE);
+    }
   }
 
   function resizeCanvas() {
@@ -2424,9 +2651,10 @@
     const tile = state.map[state.player.gridY][state.player.gridX];
     if (tile === Tile.FOREST) return "小さい森";
     if (tile === Tile.DEEP_FOREST) return "深い森";
-    if (tile === Tile.GRASS) return "草原地帯";
+    if (tile === Tile.GRASS) return "平原";
     if (tile === Tile.MOUNTAIN) return "山岳地帯";
     if (tile === Tile.HIGH_MOUNTAIN) return "高い山";
+    if (tile === Tile.RIVER) return "川辺";
     if (tile === Tile.SEA) return "海辺";
     if (tile === Tile.MONOLITH) return "黒い石の前";
     return "未知の地";
@@ -2530,7 +2758,8 @@
     drawPixelTextScaled("ICON LIST", GAME_X + 18, GAME_Y + 18, 2, "#fff");
 
     const icons = [
-      { label: "GRASS", kind: "tile", tile: Tile.GRASS },
+      { label: "PLAIN", kind: "tile", tile: Tile.GRASS },
+      { label: "RIVER", kind: "tile", tile: Tile.RIVER },
       { label: "SMALL FOREST", kind: "tile", tile: Tile.FOREST },
       { label: "DENSE FOREST", kind: "tile", tile: Tile.DEEP_FOREST },
       { label: "MOUNTAIN", kind: "tile", tile: Tile.MOUNTAIN },
@@ -2653,6 +2882,19 @@
       ctx.fillStyle = "#e8e8e8";
       ctx.fillRect(sx + 9, sy + 12, 4, 1);
       ctx.fillRect(sx + 21, sy + 18, 3, 1);
+    }
+    if (tile === Tile.RIVER) {
+      // 流れる水。海より明るく、横方向の流線で「川」と分かるようにする。
+      ctx.fillStyle = "#555";
+      ctx.fillRect(sx, sy + 8, TILE_SIZE, 16);
+      ctx.fillStyle = "#888";
+      ctx.fillRect(sx + 2, sy + 12, 12, 1);
+      ctx.fillRect(sx + 16, sy + 15, 13, 1);
+      ctx.fillRect(sx + 5, sy + 19, 14, 1);
+      ctx.fillStyle = "#cfcfcf";
+      ctx.fillRect(sx + 9, sy + 11, 5, 1);
+      ctx.fillRect(sx + 20, sy + 18, 4, 1);
+      ctx.fillRect(sx + 3, sy + 21, 3, 1);
     }
     if (tile === Tile.MONOLITH) {
       ctx.fillStyle = "#555";

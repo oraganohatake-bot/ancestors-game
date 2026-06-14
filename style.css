@@ -3,6 +3,11 @@
   --game-scale: 1;
   --game-width: 256px;
   --game-height: 384px;
+  /* セーフエリア量。JS側でも読み取って scale 計算に使う。 */
+  --sai-top: env(safe-area-inset-top, 0px);
+  --sai-right: env(safe-area-inset-right, 0px);
+  --sai-bottom: env(safe-area-inset-bottom, 0px);
+  --sai-left: env(safe-area-inset-left, 0px);
   font-family: "MS Gothic", "Osaka-Mono", "Courier New", monospace;
   background: #111;
   color: #f7f7f7;
@@ -15,6 +20,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
   background: #111;
 }
@@ -53,16 +59,24 @@ button:active {
   position: relative;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
-  display: grid;
-  place-items: center;
+  /* Canvas を実際に見えている領域(dvh)+セーフエリア内で確実に中央寄せする。
+     旧 grid レイアウト時は grid-area 由来の幽霊トラックでズレていた。 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding:
+    var(--sai-top)
+    var(--sai-right)
+    var(--sai-bottom)
+    var(--sai-left);
   background: #111;
   touch-action: none;
   cursor: auto;
 }
 
 #gameCanvas {
-  grid-area: game;
   box-sizing: content-box;
   width: calc(var(--game-width) * var(--game-scale));
   height: calc(var(--game-height) * var(--game-scale));

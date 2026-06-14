@@ -36,8 +36,19 @@
   const FOOD_TURN_INTERVAL = 18;
   const POPULATION_CHECK_INTERVAL = 32;
   const LABOR_TURN_INTERVAL = 10;
-  const CAMP_PLACE_RADIUS = 15;   // max distance from nearest base to place a camp
-  const BASE_REVEAL_RADIUS = 5;   // tiles revealed around each base/camp each turn
+  const CAMP_PLACE_RADIUS = 15;   // (legacy) max distance from nearest base to place a camp
+  const BASE_REVEAL_RADIUS = 5;   // (legacy) tiles revealed around each base/camp each turn
+  // --- Settlement expansion (per拠点 level) ---
+  const MAX_LEVEL = 3;
+  const MIN_CAMP_DISTANCE = 8;          // 既存拠点からこれ未満には建設不可
+  const POP_CAP_BY_LEVEL = [5, 10, 15]; // level 1/2/3 が加算するPOP CAP
+  const REVEAL_RADIUS_BY_LEVEL = [5, 7, 9];   // 開拓範囲
+  const CAMP_PLACE_MAX_BY_LEVEL = [15, 20, 25]; // 建設可能距離(最大)
+  // 増築コスト（現在levelをキーに、次levelへ上げるコスト）
+  const UPGRADE_COSTS = {
+    1: { wood: 40, stone: 20, leather: 10 },
+    2: { wood: 80, stone: 50, leather: 20, flint: 5 },
+  };
   const POPULATION_GROW_CHANCE = 0.72;
   const RESIDENT_FORAGE_INTERVAL = 40;
   const STAT_FOOD_STEP = 5;
@@ -769,13 +780,30 @@
     }
   }
 
+  function getSafeAreaInsets() {
+    const cs = getComputedStyle(document.documentElement);
+    const px = (name) => {
+      const n = parseFloat(cs.getPropertyValue(name));
+      return Number.isFinite(n) ? n : 0;
+    };
+    return {
+      top: px("--sai-top"),
+      right: px("--sai-right"),
+      bottom: px("--sai-bottom"),
+      left: px("--sai-left"),
+    };
+  }
+
   function resizeCanvas() {
-    const availableW = window.innerWidth;
-    const availableH = window.innerHeight;
-    // 起動直後はレイアウト未確定で innerWidth/Height が 0〜1 になることがある。
+    // 実際に見えている領域を基準にする。visualViewport はモバイルのツールバー表示/
+    // ピンチズームを反映するため innerWidth/Height より正確。
+    const vv = window.visualViewport;
+    const viewportW = (vv && vv.width) || window.innerWidth;
+    const viewportH = (vv && vv.height) || window.innerHeight;
+    // 起動直後はレイアウト未確定で値が 0〜1 になることがある。
     // その値でスケールを決めるとキャンバスが極小（scale 0.1）に固定されるため、
     // まともなサイズが取れるまで次フレームに再試行する。
-    if (availableW < 50 || availableH < 50) {
+    if (viewportW < 50 || viewportH < 50) {
       requestAnimationFrame(resizeCanvas);
       return;
     }
@@ -786,12 +814,28 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
+    // セーフエリア分を差し引いた領域に収める（CSS の #gameShell padding と一致させる）。
+    // これでノッチ/ホームインジケータ/ブラウザ下部バーにコントローラが隠れない。
+    const insets = getSafeAreaInsets();
+    const availableW = Math.max(50, viewportW - insets.left - insets.right);
+    const availableH = Math.max(50, viewportH - insets.top - insets.bottom);
+
     const canvasBorder = 4;
     const fitScale = Math.min(availableW / (INTERNAL_W + canvasBorder), availableH / (INTERNAL_H + canvasBorder));
     const scale = fitScale >= 1 ? Math.max(1, Math.floor(fitScale)) : Math.max(0.1, Math.floor(fitScale * 1000) / 1000);
     document.documentElement.style.setProperty("--game-width", `${INTERNAL_W}px`);
     document.documentElement.style.setProperty("--game-height", `${INTERNAL_H}px`);
     document.documentElement.style.setProperty("--game-scale", String(scale));
+  }
+
+  // スリープ復帰直後はモバイル Chrome の上下バー表示や visualViewport.height、
+  // dvh の再計算が数百ms 遅れて確定する。1 回の resizeCanvas では古い値を掴んで
+  // 画面位置がズレるため、即時 + 複数の遅延で繰り返し再センタリングする。
+  function scheduleResizeCanvas() {
+    resizeCanvas();
+    window.setTimeout(resizeCanvas, 100);
+    window.setTimeout(resizeCanvas, 300);
+    window.setTimeout(resizeCanvas, 800);
   }
 
   function applyCanvasLayout() {
@@ -979,6 +1023,12 @@
     if (typeof state.laborUnlocked !== "boolean") state.laborUnlocked = state.settlementUnlocked;
     if (typeof state.placingCamp !== "boolean") state.placingCamp = false;
     if (!state.campCursor) state.campCursor = null;
+    if (Array.isArray(state.bases)) {
+      for (const base of state.bases) {
+        if (!Number.isFinite(base.level)) base.level = 1;
+        base.level = Math.max(1, Math.min(MAX_LEVEL, base.level));
+      }
+    }
     if (typeof state.laborMenuOpen !== "boolean") state.laborMenuOpen = false;
     if (!state.labor || typeof state.labor !== "object") state.labor = { fruit: 0, stone: 0, branch: 0, hunt: 0 };
     if (!Number.isFinite(state.labor.fruit)) state.labor.fruit = 0;
@@ -1282,11 +1332,23 @@
     return VISION_RADII[stage] + boost;
   }
 
+  function baseLevel(base) {
+    return base && Number.isFinite(base.level) ? base.level : 1;
+  }
+
+  function baseRevealRadius(base) {
+    return REVEAL_RADIUS_BY_LEVEL[baseLevel(base) - 1] || BASE_REVEAL_RADIUS;
+  }
+
+  function campPlaceMaxForBase(base) {
+    return CAMP_PLACE_MAX_BY_LEVEL[baseLevel(base) - 1] || CAMP_PLACE_RADIUS;
+  }
+
   function revealAroundBases() {
     if (!state || !state.bases || !state.bases.length) return;
     if (!state.explored) state.explored = {};
-    const r = BASE_REVEAL_RADIUS;
     for (const base of state.bases) {
+      const r = baseRevealRadius(base);
       for (let dy = -r; dy <= r; dy += 1) {
         for (let dx = -r; dx <= r; dx += 1) {
           const nx = base.x + dx;
@@ -1300,9 +1362,32 @@
     }
   }
 
+  // 建設可否を判定。優先順位: terrain > tooClose > tooFar > ok
+  function campPlacementStatus(x, y) {
+    if (!state || !state.bases) return "terrain";
+    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return "terrain";
+    const t = state.map[y] && state.map[y][x];
+    if (!isBuildableTile(t)) return "terrain";
+    if (state.bases.some((b) => b.x === x && b.y === y)) return "terrain";
+    let tooClose = false;
+    let withinMax = false;
+    for (const b of state.bases) {
+      const d = distance(b.x, b.y, x, y);
+      if (d < MIN_CAMP_DISTANCE) tooClose = true;
+      if (d <= campPlaceMaxForBase(b)) withinMax = true;
+    }
+    if (tooClose) return "tooClose";
+    if (!withinMax) return "tooFar";
+    return "ok";
+  }
+
+  function getCurrentBase() {
+    if (!state || !state.player || !state.bases) return null;
+    return state.bases.find((b) => b.x === state.player.gridX && b.y === state.player.gridY) || null;
+  }
+
   function isInCampRange(x, y) {
-    if (!state || !state.bases || !state.bases.length) return false;
-    return state.bases.some((b) => distance(b.x, b.y, x, y) <= CAMP_PLACE_RADIUS);
+    return campPlacementStatus(x, y) === "ok";
   }
 
   function isSeenTile(x, y) {
@@ -1983,7 +2068,11 @@
     if (state.buddyUnlocked) options.push(state.buddyOn ? "BUDDY ON" : "BUDDY OFF");
     if (state.craftingUnlocked) options.push("CRAFT");
     if (state.knewSpark && !state.hasFire) options.push("MAKE FIRE");
-    if (state.settlementUnlocked) options.push("ESTABLISH CAMP");
+    if (state.settlementUnlocked) {
+      const cur = getCurrentBase();
+      if (cur && baseLevel(cur) < MAX_LEVEL) options.push("UPGRADE CAMP");
+      options.push("ESTABLISH CAMP");
+    }
     if (state.laborUnlocked) options.push("ASSIGN WORK");
     return options;
   }
@@ -2019,6 +2108,10 @@
       state.placingCamp = true;
       state.campCursor = { x: state.player.gridX, y: state.player.gridY };
       addLog("MOVE CURSOR, ACT TO PLACE");
+      return;
+    }
+    if (option === "UPGRADE CAMP") {
+      upgradeCamp();
       return;
     }
     if (option === "MAKE FIRE") {
@@ -2182,7 +2275,7 @@
       addLog("ここには作れない");
       return false;
     }
-    state.bases.push({ x, y, type: "BASE", name: "巣" });
+    state.bases.push({ x, y, type: "BASE", name: "巣", level: 1 });
     addWisdom("base", 1);
     addAchievement("拠点を作った");
     addLog("BASE SET");
@@ -2193,34 +2286,27 @@
   function placeNewCamp() {
     if (!state.placingCamp || !state.campCursor) return;
     const { x, y } = state.campCursor;
-    const tile = state.map[y][x];
-    if (!isBuildableTile(tile)) {
-      addLog("CANNOT BUILD HERE");
+    const status = campPlacementStatus(x, y);
+    if (status === "terrain") {
+      addLog("BLOCKED TERRAIN");
       return;
     }
-    if (state.bases.some((b) => b.x === x && b.y === y)) {
-      addLog("ALREADY OCCUPIED");
+    if (status === "tooClose") {
+      addLog("TOO CLOSE TO CAMP");
       return;
     }
-    if (!isInCampRange(x, y)) {
-      addLog("TOO FAR FROM BASE");
+    if (status === "tooFar") {
+      addLog("TOO FAR FROM CAMP");
       return;
     }
     const CAMP_COST = { wood: 20, stone: 10, leather: 5 };
     const curWood    = state.tribe.wood    || 0;
     const curStone   = state.tribe.stone   || 0;
     const curLeather = state.tribe.leather || 0;
-    console.log("CAMP COST CHECK", {
-      bases: state.bases.length,
-      wood: curWood,
-      stone: curStone,
-      leather: curLeather,
-      cost: CAMP_COST
-    });
     if (curWood < CAMP_COST.wood || curStone < CAMP_COST.stone || curLeather < CAMP_COST.leather) {
       state.placingCamp = false;
       state.campCursor = null;
-      addLog("NOT ENOUGH");
+      addLog("NOT ENOUGH RESOURCE");
       if (curWood    < CAMP_COST.wood)    addLog(`NEED BRANCH ${CAMP_COST.wood}(/${curWood})`);
       if (curStone   < CAMP_COST.stone)   addLog(`NEED STONE ${CAMP_COST.stone}(/${curStone})`);
       if (curLeather < CAMP_COST.leather) addLog(`NEED LEATHER ${CAMP_COST.leather}(/${curLeather})`);
@@ -2229,7 +2315,7 @@
     state.tribe.wood -= CAMP_COST.wood;
     state.tribe.stone -= CAMP_COST.stone;
     state.tribe.leather -= CAMP_COST.leather;
-    state.bases.push({ x, y, type: "CAMP", name: "野営地" });
+    state.bases.push({ x, y, type: "CAMP", name: "野営地", level: 1 });
     revealAroundBases();
     state.placingCamp = false;
     state.campCursor = null;
@@ -2243,6 +2329,46 @@
     } else {
       addLog("NEW CAMP BUILT");
     }
+  }
+
+  function upgradeCamp() {
+    const base = getCurrentBase();
+    if (!base) return;
+    const level = baseLevel(base);
+    if (level >= MAX_LEVEL) {
+      addLog("MAX LEVEL");
+      return;
+    }
+    const cost = UPGRADE_COSTS[level];
+    if (!cost) {
+      addLog("MAX LEVEL");
+      return;
+    }
+    const curWood    = state.tribe.wood    || 0;
+    const curStone   = state.tribe.stone   || 0;
+    const curLeather = state.tribe.leather || 0;
+    const curFlint   = state.tribe.flint   || 0;
+    const needWood    = cost.wood    || 0;
+    const needStone   = cost.stone   || 0;
+    const needLeather = cost.leather || 0;
+    const needFlint   = cost.flint   || 0;
+    if (curWood < needWood || curStone < needStone || curLeather < needLeather || curFlint < needFlint) {
+      addLog("NOT ENOUGH RESOURCE");
+      if (curWood    < needWood)    addLog(`NEED BRANCH ${needWood}(/${curWood})`);
+      if (curStone   < needStone)   addLog(`NEED STONE ${needStone}(/${curStone})`);
+      if (curLeather < needLeather) addLog(`NEED LEATHER ${needLeather}(/${curLeather})`);
+      if (curFlint   < needFlint)   addLog(`NEED FLINT ${needFlint}(/${curFlint})`);
+      return;
+    }
+    state.tribe.wood    -= needWood;
+    state.tribe.stone   -= needStone;
+    state.tribe.leather -= needLeather;
+    state.tribe.flint   -= needFlint;
+    base.level = level + 1;
+    state.baseMenuOpen = false;
+    revealAroundBases();
+    addLog("CAMP UPGRADED");
+    showMilestone("CAMP UPGRADED", "THE TRIBE BUILDS HIGHER");
   }
 
   function tryRecoverRelic() {
@@ -2464,15 +2590,17 @@
       const cy = state.campCursor.y;
       const csx = Math.floor(cx * TILE_SIZE - cameraX);
       const csy = Math.floor(cy * TILE_SIZE - cameraY);
-      const t = state.map[cy] && state.map[cy][cx];
-      const outOfRange = !state.bases.some((b) => distance(b.x, b.y, cx, cy) <= CAMP_PLACE_RADIUS);
-      const invalid = !isBuildableTile(t) || state.bases.some((b) => b.x === cx && b.y === cy) || outOfRange;
-      ctx.fillStyle = invalid ? "#888" : "#fff";
+      const status = campPlacementStatus(cx, cy);
+      // 有効=緑 / 近すぎ=赤 / 遠すぎ=灰 / 地形NG=赤
+      const cursorColor = status === "ok" ? "#4f4"
+        : status === "tooFar" ? "#888"
+        : "#f44";
+      ctx.fillStyle = cursorColor;
       ctx.fillRect(csx, csy, TILE_SIZE, 2);
       ctx.fillRect(csx, csy + TILE_SIZE - 2, TILE_SIZE, 2);
       ctx.fillRect(csx, csy, 2, TILE_SIZE);
       ctx.fillRect(csx + TILE_SIZE - 2, csy, 2, TILE_SIZE);
-      if (!invalid) drawCamp(csx, csy);
+      if (status === "ok") drawCamp(csx, csy, 1);
     }
     if (state.huntingUnlocked) {
       for (const animal of state.animals) {
@@ -3080,8 +3208,9 @@
   function drawBase(base, cameraX, cameraY) {
     const sx = Math.floor(base.x * TILE_SIZE - cameraX);
     const sy = Math.floor(base.y * TILE_SIZE - cameraY);
+    const lv = baseLevel(base);
     if (base.type === "CAMP") {
-      drawCamp(sx, sy);
+      drawCamp(sx, sy, lv);
     } else {
       ctx.fillStyle = "#111";
       ctx.fillRect(sx + 4, sy + 24, 24, 4);
@@ -3095,6 +3224,13 @@
       ctx.fillStyle = "#777";
       ctx.fillRect(sx + 8, sy + 24, 17, 1);
     }
+    if (lv >= 2) {
+      const label = `L${lv}`;
+      const lw = measurePixelText(label) + 2;
+      ctx.fillStyle = "#111";
+      ctx.fillRect(sx + 1, sy + 1, lw + 2, 9);
+      drawPixelTextScaled(label, sx + 2, sy + 2, 1, "#fff");
+    }
     if (manhattanDistance(state.player.gridX, state.player.gridY, base.x, base.y) <= 1) {
       ctx.fillStyle = "#fff";
       ctx.fillRect(sx, sy, TILE_SIZE, 2);
@@ -3104,8 +3240,38 @@
     }
   }
 
-  function drawCamp(sx, sy) {
-    // Smaller hut — lean-to shape
+  function drawCamp(sx, sy, level = 1) {
+    if (level >= 3) {
+      // 集落風 — 母屋 + 2つの小屋
+      ctx.fillStyle = "#111";
+      ctx.fillRect(sx + 9, sy + 12, 14, 14);   // 母屋
+      ctx.fillRect(sx + 8, sy + 10, 16, 3);     // 棟
+      ctx.fillRect(sx + 2, sy + 20, 8, 8);      // 左の小屋
+      ctx.fillRect(sx + 22, sy + 20, 8, 8);     // 右の小屋
+      ctx.fillRect(sx + 1, sy + 28, 30, 2);     // 地面
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(sx + 14, sy + 19, 4, 7);     // 母屋の入口
+      ctx.fillRect(sx + 4, sy + 23, 3, 5);
+      ctx.fillRect(sx + 25, sy + 23, 3, 5);
+      ctx.fillStyle = "#555";
+      ctx.fillRect(sx + 10, sy + 16, 12, 1);
+      return;
+    }
+    if (level >= 2) {
+      // 少し大きい小屋
+      ctx.fillStyle = "#111";
+      ctx.fillRect(sx + 6, sy + 25, 20, 5);
+      ctx.fillRect(sx + 8, sy + 20, 16, 5);
+      ctx.fillRect(sx + 11, sy + 14, 10, 6);
+      ctx.fillRect(sx + 14, sy + 9, 4, 5);
+      ctx.fillRect(sx + 4, sy + 30, 24, 2);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(sx + 14, sy + 21, 5, 6);
+      ctx.fillStyle = "#555";
+      ctx.fillRect(sx + 9, sy + 25, 14, 1);
+      return;
+    }
+    // Lv1: Smaller hut — lean-to shape
     ctx.fillStyle = "#111";
     ctx.fillRect(sx + 8, sy + 26, 16, 4);
     ctx.fillRect(sx + 10, sy + 22, 12, 4);
@@ -4021,19 +4187,22 @@
   }
 
   function drawCampRangeIndicators(cameraX, cameraY) {
-    // Draw dotted border around valid placement range for each base
-    ctx.fillStyle = "#444";
-    const r = CAMP_PLACE_RADIUS;
-    for (const base of state.bases) {
+    // 各拠点について、近接禁止範囲(赤)と建設可能範囲(灰)を点線で描く
+    const drawRing = (base, radius, color) => {
+      ctx.fillStyle = color;
       for (let angle = 0; angle < 360; angle += 3) {
         const rad = (angle * Math.PI) / 180;
-        const tx = Math.round(base.x + Math.cos(rad) * r);
-        const ty = Math.round(base.y + Math.sin(rad) * r);
+        const tx = Math.round(base.x + Math.cos(rad) * radius);
+        const ty = Math.round(base.y + Math.sin(rad) * radius);
         if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
         const sx = Math.floor(tx * TILE_SIZE - cameraX) + TILE_SIZE / 2 - 1;
         const sy = Math.floor(ty * TILE_SIZE - cameraY) + TILE_SIZE / 2 - 1;
         ctx.fillRect(sx, sy, 2, 2);
       }
+    };
+    for (const base of state.bases) {
+      drawRing(base, MIN_CAMP_DISTANCE, "#a33");          // 近すぎ
+      drawRing(base, campPlaceMaxForBase(base), "#666");  // 建設可能上限
     }
   }
 
@@ -4735,8 +4904,8 @@
   }
 
   function getPopCap() {
-    if (!state) return 5;
-    return state.bases.length * 5;
+    if (!state || !state.bases) return 5;
+    return state.bases.reduce((sum, b) => sum + (POP_CAP_BY_LEVEL[baseLevel(b) - 1] || 5), 0);
   }
 
   function getLaborAvailable() {
@@ -4864,9 +5033,26 @@
     return Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
 
-  window.addEventListener("resize", resizeCanvas);
-  window.addEventListener("orientationchange", resizeCanvas);
-  window.addEventListener("load", resizeCanvas);
+  window.addEventListener("resize", scheduleResizeCanvas);
+  // orientation 変更直後は innerHeight/visualViewport の更新が遅れるため、
+  // 即時 + 遅延の多段で再計算してズレを防ぐ。
+  window.addEventListener("orientationchange", scheduleResizeCanvas);
+  window.addEventListener("load", scheduleResizeCanvas);
+  // スリープ→復帰時。resize/orientationchange が発火しないことがあるため、
+  // タブが再表示されたタイミング（visibilitychange / pageshow / focus）でも
+  // 再レイアウトしてズレを補正する。
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      scheduleResizeCanvas();
+    }
+  });
+  window.addEventListener("pageshow", scheduleResizeCanvas);
+  window.addEventListener("focus", scheduleResizeCanvas);
+  // モバイルのツールバー表示/非表示・ピンチズームに追従する。
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleResizeCanvas);
+    window.visualViewport.addEventListener("scroll", scheduleResizeCanvas);
+  }
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
     if (state && state.milestoneOverlay) {

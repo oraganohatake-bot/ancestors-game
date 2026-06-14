@@ -4005,18 +4005,20 @@
 
   function getControlRects() {
     if (layoutMode === "landscape") {
+      // 左ストリップは D-pad 専用、右ストリップに ACT / SYSTEM / MENU をまとめる。
       return {
-        dpadBox: { x: 20, y: 520, w: 120, h: 120 },
-        menu: { id: "menu", x: 20, y: 400, w: 120, h: 80 },
-        start: { id: "start", x: 820, y: 400, w: 120, h: 80 },
-        action: { id: "action", x: 820, y: 520, w: 120, h: 120 },
+        dpadBox: { x: 6, y: 500, w: 150, h: 150 },
+        menu: { id: "menu", x: 820, y: 380, w: 120, h: 60 },
+        start: { id: "start", x: 820, y: 448, w: 120, h: 60 },
+        action: { id: "action", x: 810, y: 520, w: 140, h: 140 },
       };
     }
+    // 左側は D-pad 専用（大きく）、右側下部に ACT、その左に小さい SYSTEM / MENU。
     return {
-      dpadBox: { x: 36, y: CONTROL_Y + 168, w: 124, h: 124 },
-      menu: { id: "menu", x: 36, y: CONTROL_Y + 48, w: 124, h: 80 },
-      start: { id: "start", x: 480, y: CONTROL_Y + 48, w: 124, h: 80 },
-      action: { id: "action", x: 480, y: CONTROL_Y + 168, w: 124, h: 124 },
+      dpadBox: { x: 28, y: CONTROL_Y + 96, w: 168, h: 168 },
+      menu: { id: "menu", x: 368, y: CONTROL_Y + 114, w: 96, h: 60 },
+      start: { id: "start", x: 368, y: CONTROL_Y + 186, w: 96, h: 60 },
+      action: { id: "action", x: 480, y: CONTROL_Y + 114, w: 132, h: 132 },
     };
   }
 

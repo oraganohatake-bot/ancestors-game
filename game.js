@@ -40,14 +40,13 @@
   const BASE_REVEAL_RADIUS = 5;   // (legacy) tiles revealed around each base/camp each turn
   // --- Settlement expansion (per拠点 level) ---
   const MAX_LEVEL = 3;
-  const MIN_CAMP_DISTANCE = 8;          // 既存拠点からこれ未満には建設不可
+  const MIN_CAMP_DISTANCE = 3;          // 既存拠点からチェビシェフ距離でこれ以下には建設不可（4マス以上離す）
   const POP_CAP_BY_LEVEL = [5, 10, 15]; // level 1/2/3 が加算するPOP CAP
   const REVEAL_RADIUS_BY_LEVEL = [5, 7, 9];   // 開拓範囲
-  const CAMP_PLACE_MAX_BY_LEVEL = [15, 20, 25]; // 建設可能距離(最大)
   // 増築コスト（現在levelをキーに、次levelへ上げるコスト）
   const UPGRADE_COSTS = {
-    1: { wood: 40, stone: 20, leather: 10 },
-    2: { wood: 80, stone: 50, leather: 20, flint: 5 },
+    1: { wood: 40, stone: 20, leather: 10, thickBranch: 3 },
+    2: { wood: 80, stone: 50, leather: 20, flint: 5, thickBranch: 8 },
   };
   const POPULATION_GROW_CHANCE = 0.72;
   const RESIDENT_FORAGE_INTERVAL = 40;
@@ -152,6 +151,7 @@
     STONE: "stone",
     LEATHER: "leather",
     FLINT: "flint",
+    THICK_BRANCH: "thickBranch",
   };
 
   const RESOURCE_MAX_REMAINING = {
@@ -159,6 +159,7 @@
     [Resource.WOOD]: 8,
     [Resource.STONE]: 5,
     [Resource.FLINT]: 5,
+    [Resource.THICK_BRANCH]: 3,   // 太い枝: 通常BRANCHより少なめ
   };
 
   const RESOURCE_REGROW_TIME = {
@@ -166,6 +167,7 @@
     [Resource.WOOD]: 150,
     [Resource.STONE]: 300,
     [Resource.FLINT]: 300,
+    [Resource.THICK_BRANCH]: 250, // 太い枝: 通常BRANCHより長め
   };
   const ANIMAL_COUNT = 80;
   const ANIMAL_RESPAWN_TURNS = 120;
@@ -224,7 +226,26 @@
       prereqs: [],
       vision: "WE CAN ENDURE",
       wisKey: "craft_clothing",
-      bonus: { damageReduction: 0.1 },
+      // 旧: ダメージ-10%。新仕様で最大HP150へ変更（tryCraftCombination内で適用）。
+    },
+    {
+      id: "spear",
+      name: "SPEAR",
+      inputs: ["STONE KNIFE", "BRANCH"],
+      cost: { wood: 1 },
+      prereqs: ["stone_knife"],
+      vision: "THE HAND REACHES FARTHER",
+      wisKey: "craft_spear",
+      bonus: { atk: 1, attackRangeBonus: 1 },
+    },
+    {
+      id: "stone_axe",
+      name: "STONE AXE",
+      inputs: ["STONE", "BRANCH"],
+      cost: { stone: 1, wood: 1 },
+      prereqs: [],
+      vision: "WOOD CAN BE SHAPED",
+      wisKey: "craft_stone_axe",
     },
     {
       id: "pack_frame",
@@ -354,7 +375,7 @@
       evolutionStage: 0,
       player,
       population: 2,
-      tribe: { fruit: 1, meat: 0, wood: 0, stone: 0, leather: 0, flint: 0 },
+      tribe: { fruit: 1, meat: 0, wood: 0, stone: 0, leather: 0, flint: 0, thickBranch: 0 },
       wisdom: 1,
       tribeAtk: 1,
       tribeInt: 1,
@@ -432,7 +453,8 @@
       age,
       startAge: age,
       maxAge,
-      hp: 100,
+      hp: (state && state.discoveries && state.discoveries.craft_clothing) ? 150 : 100,
+      maxHp: (state && state.discoveries && state.discoveries.craft_clothing) ? 150 : 100,
       strength: baseAtk,
       intelligence: baseInt,
       inheritedWisdom: baseWis,
@@ -441,7 +463,7 @@
       life: 0,
       maxLife: DEBUG_LIFE_TURNS > 0 ? DEBUG_LIFE_TURNS : lifeTurnsForAges(age, maxAge),
       plainMoveCount: 0,
-      inventory: { fruit: 0, meat: 0, wood: 0, stone: 0, leather: 0, flint: 0 },
+      inventory: { fruit: 0, meat: 0, wood: 0, stone: 0, leather: 0, flint: 0, thickBranch: 0 },
       capacity: 10,
       face,
       achievements: [],
@@ -671,6 +693,26 @@
       seedStarterStone(resources, map, spawn);
     }
     return resources;
+  }
+
+  // STONE AXE 解放時に DENSE_FOREST へ THICK_BRANCH を出現させる。
+  // 既存の資源が無いタイルにだけ配置し、通常BRANCHと混在しないようにする。
+  function seedThickBranch() {
+    if (!state || !state.map || !state.resources) return;
+    let added = 0;
+    for (let y = 1; y < MAP_H - 1; y += 1) {
+      for (let x = 1; x < MAP_W - 1; x += 1) {
+        if (state.map[y][x] !== Tile.DEEP_FOREST) continue;
+        const key = `${x},${y}`;
+        if (state.resources[key]) continue;
+        const n = seededNoise(x * 31 + 7, y * 13 + 5);
+        if (n < 0.18) {
+          state.resources[key] = makeResourceNode(Resource.THICK_BRANCH);
+          added += 1;
+        }
+      }
+    }
+    return added;
   }
 
   function generateAnimals(map, spawn = null) {
@@ -999,7 +1041,7 @@
     revealAroundBases();
     updateInventions();
     updateEvolution();
-    if (state.debugImmortal && state.player) state.player.hp = 100; // IMMORTAL: HP満タン維持
+    if (state.debugImmortal && state.player) state.player.hp = getPlayerMaxHp(); // IMMORTAL: HP満タン維持
     if (state.turn - state.lastAutosaveTurn >= AUTOSAVE_TURN_INTERVAL) {
       state.lastAutosaveTurn = state.turn;
       saveGame();
@@ -1116,6 +1158,10 @@
       if (!Number.isFinite(state.player.strength)) state.player.strength = 1;
       if (!Number.isFinite(state.player.intelligence)) state.player.intelligence = 1;
       if (!Number.isFinite(state.player.inheritedWisdom)) state.player.inheritedWisdom = state.wisdom;
+      // CLOTHING 効果を反映: 最大HPを更新し、現在HPを上限内にclamp。
+      state.player.maxHp = getPlayerMaxHp();
+      if (!Number.isFinite(state.player.hp)) state.player.hp = state.player.maxHp;
+      if (state.player.hp > state.player.maxHp) state.player.hp = state.player.maxHp;
       migrateInventory(state.player.inventory);
     }
     for (const resident of state.residents) {
@@ -1155,6 +1201,7 @@
     if (!Number.isFinite(state.tribe.stone)) state.tribe.stone = 0;
     if (!Number.isFinite(state.tribe.leather)) state.tribe.leather = 0;
     if (!Number.isFinite(state.tribe.flint)) state.tribe.flint = 0;
+    if (!Number.isFinite(state.tribe.thickBranch)) state.tribe.thickBranch = 0;
     delete state.tribe.food;
     if (state.player) migrateInventory(state.player.inventory);
     if (Array.isArray(state.relics)) {
@@ -1178,6 +1225,7 @@
     if (!Number.isFinite(inv.stone)) inv.stone = 0;
     if (!Number.isFinite(inv.leather)) inv.leather = 0;
     if (!Number.isFinite(inv.flint)) inv.flint = 0;
+    if (!Number.isFinite(inv.thickBranch)) inv.thickBranch = 0;
     delete inv.food;
   }
 
@@ -1381,10 +1429,6 @@
     return REVEAL_RADIUS_BY_LEVEL[baseLevel(base) - 1] || BASE_REVEAL_RADIUS;
   }
 
-  function campPlaceMaxForBase(base) {
-    return CAMP_PLACE_MAX_BY_LEVEL[baseLevel(base) - 1] || CAMP_PLACE_RADIUS;
-  }
-
   function revealAroundBases() {
     if (!state || !state.bases || !state.bases.length) return;
     if (!state.explored) state.explored = {};
@@ -1403,23 +1447,30 @@
     }
   }
 
-  // 建設可否を判定。優先順位: unexplored > terrain > tooClose > tooFar > ok
+  // タイル(x,y)が現在のプレイ画面（プレイヤー中心のカメラ）内に完全に収まっているか。
+  function isOnScreen(x, y) {
+    if (!state || !state.player) return false;
+    const camX = state.player.gridX * TILE_SIZE - PLAY_W / 2 + TILE_SIZE / 2 - GAME_X;
+    const camY = state.player.gridY * TILE_SIZE - PLAY_H / 2 + TILE_SIZE / 2 - GAME_Y;
+    const sx = x * TILE_SIZE - camX;
+    const sy = y * TILE_SIZE - camY;
+    return sx >= GAME_X && sx + TILE_SIZE <= GAME_X + PLAY_W &&
+           sy >= GAME_Y && sy + TILE_SIZE <= GAME_Y + PLAY_H;
+  }
+
+  // 建設可否を判定。優先順位: unexplored > outOfView > terrain > tooClose > ok
   function campPlacementStatus(x, y) {
     if (!state || !state.bases) return "terrain";
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return "terrain";
-    if (!isSeenTile(x, y)) return "unexplored";
+    if (!isSeenTile(x, y)) return "unexplored";       // 未踏エリアには置けない
+    if (!isOnScreen(x, y)) return "outOfView";        // 画面外には置けない
     const t = state.map[y] && state.map[y][x];
-    if (!isBuildableTile(t)) return "terrain";
-    if (state.bases.some((b) => b.x === x && b.y === y)) return "terrain";
-    let tooClose = false;
-    let withinMax = false;
+    if (!isBuildableTile(t)) return "terrain";        // 海/川/山/高山などは不可
+    if (state.bases.some((b) => b.x === x && b.y === y)) return "terrain"; // 既存拠点上は不可
+    // 既存BASE/CAMPから3マス以内（チェビシェフ距離）には置けない。4マス以上で可。
     for (const b of state.bases) {
-      const d = distance(b.x, b.y, x, y);
-      if (d < MIN_CAMP_DISTANCE) tooClose = true;
-      if (d <= campPlaceMaxForBase(b)) withinMax = true;
+      if (chebyshev(b.x, b.y, x, y) <= MIN_CAMP_DISTANCE) return "tooClose";
     }
-    if (tooClose) return "tooClose";
-    if (!withinMax) return "tooFar";
     return "ok";
   }
 
@@ -1792,6 +1843,18 @@
       const animal = state.animals.find((item) => item.x === tile.x && item.y === tile.y);
       if (animal) return { type: "animal", x: tile.x, y: tile.y, animal };
     }
+    // SPEAR解放後は上下左右2マス先の獲物も狙える（斜めは不可）。
+    const range = getAttackRange();
+    if (range >= 2) {
+      const p = state.player;
+      for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+        const tx = p.gridX + dx * 2;
+        const ty = p.gridY + dy * 2;
+        if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
+        const animal = state.animals.find((item) => item.x === tx && item.y === ty);
+        if (animal) return { type: "animal", x: tx, y: ty, animal };
+      }
+    }
     for (const tile of tiles) {
       const relic = state.relics.find((item) => !item.recovered && item.x === tile.x && item.y === tile.y);
       if (relic) return { type: "relic", x: tile.x, y: tile.y, relic };
@@ -1939,6 +2002,16 @@
       addLog(`FL +${amount}`);
       addPopup(target.x, target.y, `FL+${amount}`);
     }
+    if (target.resource.type === Resource.THICK_BRANCH) {
+      const firstThick = !state.discoveries.gather_thick_branch;
+      if (firstThick) {
+        state.discoveries.gather_thick_branch = true;
+        showMilestone("UNDERSTOOD THICK BRANCH", "STRONG WOOD FOR STRONG WALLS");
+      }
+      p.inventory.thickBranch = (p.inventory.thickBranch || 0) + amount;
+      addLog(`TB +${amount}`);
+      addPopup(target.x, target.y, `TB+${amount}`);
+    }
     clampInventory();
     const resource = target.resource;
     resource.harvested = true;
@@ -1961,6 +2034,7 @@
     if (type === Resource.FLINT) return actorInt >= 10;
     if (type === "meat") return !!state.huntingUnlocked;
     if (type === Resource.LEATHER) return !!state.huntingUnlocked;
+    if (type === Resource.THICK_BRANCH) return !!(state.discoveries && state.discoveries.craft_stone_axe);
     return true;
   }
 
@@ -2035,6 +2109,8 @@
     for (const r of CRAFT_RECIPES) {
       if (r.isInputItem && state.craftedItems.includes(r.id)) items.push(r.name);
     }
+    // STONE KNIFE は知識として保持され、SPEAR の素材（理解済みであれば選択可）になる。
+    if (state.craftedItems.includes("stone_knife")) items.push("STONE KNIFE");
     return items;
   }
 
@@ -2054,7 +2130,10 @@
         state.craftedItems.push(recipe.id);
       }
       if (recipe.bonus?.atk) { state.tribeAtk += recipe.bonus.atk; showStatNotice("ATK", recipe.bonus.atk); }
+      if (recipe.bonus?.attackRangeBonus) { state.attackRangeBonus = (state.attackRangeBonus || 0) + recipe.bonus.attackRangeBonus; }
       if (recipe.effect === "hunting") { state.huntingUnlocked = true; syncKnownMaterials(); }
+      if (recipe.id === "stone_axe") { seedThickBranch(); }
+      if (recipe.id === "clothing") { applyClothingMaxHp(); }
       if (firstTime) {
         state.discoveries[recipe.wisKey] = true;
         state.wisdom += 1;
@@ -2225,7 +2304,7 @@
 
   function finishRestSequence() {
     depositToBase();
-    state.player.hp = 100;
+    state.player.hp = getPlayerMaxHp();
     if (state.resources) {
       for (const r of Object.values(state.resources)) {
         if (r && r.harvested && r.remaining > 0) r.harvested = false;
@@ -2238,6 +2317,24 @@
   function getPlayerCapacity() {
     const base = 10 + getCraftBonus("capacityBonus");
     return state && state.buddyOn ? base + 10 : base;
+  }
+
+  // CLOTHING 理解後は最大HPが150に増える（世代をまたいで維持）。
+  function getPlayerMaxHp() {
+    return state && state.discoveries && state.discoveries.craft_clothing ? 150 : 100;
+  }
+
+  function applyClothingMaxHp() {
+    const max = getPlayerMaxHp();
+    if (state && state.player) {
+      state.player.maxHp = max;
+      state.player.hp = max; // 初成功時は満タンまで回復
+    }
+  }
+
+  // SPEAR 理解後は上下左右2マス先まで攻撃可能。
+  function getAttackRange() {
+    return state && state.discoveries && state.discoveries.craft_spear ? 2 : 1;
   }
 
   function autoDepositOnBase() {
@@ -2286,18 +2383,21 @@
     const stoneStored = inv.stone || 0;
     const leatherStored = inv.leather || 0;
     const flintStored = inv.flint || 0;
+    const thickBranchStored = inv.thickBranch || 0;
     state.tribe.fruit += fruitStored;
     state.tribe.meat += meatStored;
     state.tribe.wood += woodStored;
     state.tribe.stone += stoneStored;
     state.tribe.leather += leatherStored;
     state.tribe.flint += flintStored;
+    state.tribe.thickBranch = (state.tribe.thickBranch || 0) + thickBranchStored;
     if (fruitStored > 0) addLog("FRUIT STORED");
     if (meatStored > 0) addLog("MEAT STORED");
     if (woodStored > 0) addLog("WOOD STORED");
     if (stoneStored > 0) addLog("STONE STORED");
     if (leatherStored > 0) addLog("LEATHER STORED");
     if (flintStored > 0) addLog("FLINT STORED");
+    if (thickBranchStored > 0) addLog("THICK BRANCH STORED");
     if (fruitStored > 0 || meatStored > 0) applyStoredStatGrowth(fruitStored, meatStored);
     inv.fruit = 0;
     inv.meat = 0;
@@ -2305,6 +2405,7 @@
     inv.stone = 0;
     inv.leather = 0;
     inv.flint = 0;
+    inv.thickBranch = 0;
     return true;
   }
 
@@ -2332,8 +2433,13 @@
     if (!state.placingCamp || !state.campCursor) return;
     const { x, y } = state.campCursor;
     const status = campPlacementStatus(x, y);
+    // 失敗ログ優先順位: UNEXPLORED > OUT OF VIEW > BLOCKED TERRAIN > TOO CLOSE > NOT ENOUGH RESOURCE
     if (status === "unexplored") {
       addLog("UNEXPLORED AREA");
+      return;
+    }
+    if (status === "outOfView") {
+      addLog("OUT OF VIEW");
       return;
     }
     if (status === "terrain") {
@@ -2342,10 +2448,6 @@
     }
     if (status === "tooClose") {
       addLog("TOO CLOSE TO CAMP");
-      return;
-    }
-    if (status === "tooFar") {
-      addLog("TOO FAR FROM CAMP");
       return;
     }
     const CAMP_COST = { wood: 20, stone: 10, leather: 5 };
@@ -2397,22 +2499,26 @@
     const curStone   = state.tribe.stone   || 0;
     const curLeather = state.tribe.leather || 0;
     const curFlint   = state.tribe.flint   || 0;
+    const curThick   = state.tribe.thickBranch || 0;
     const needWood    = cost.wood    || 0;
     const needStone   = cost.stone   || 0;
     const needLeather = cost.leather || 0;
     const needFlint   = cost.flint   || 0;
-    if (curWood < needWood || curStone < needStone || curLeather < needLeather || curFlint < needFlint) {
+    const needThick   = cost.thickBranch || 0;
+    if (curWood < needWood || curStone < needStone || curLeather < needLeather || curFlint < needFlint || curThick < needThick) {
       addLog("NOT ENOUGH RESOURCE");
       if (curWood    < needWood)    addLog(`NEED BRANCH ${needWood}(/${curWood})`);
       if (curStone   < needStone)   addLog(`NEED STONE ${needStone}(/${curStone})`);
       if (curLeather < needLeather) addLog(`NEED LEATHER ${needLeather}(/${curLeather})`);
       if (curFlint   < needFlint)   addLog(`NEED FLINT ${needFlint}(/${curFlint})`);
+      if (curThick   < needThick)   addLog(`NEED THICK BRANCH ${needThick}(/${curThick})`);
       return;
     }
     state.tribe.wood    -= needWood;
     state.tribe.stone   -= needStone;
     state.tribe.leather -= needLeather;
     state.tribe.flint   -= needFlint;
+    state.tribe.thickBranch = curThick - needThick;
     base.level = level + 1;
     state.baseMenuOpen = false;
     revealAroundBases();
@@ -2521,8 +2627,9 @@
       moveToY: spawn.y,
       moveStart: 0,
       moveEnd: 0,
-      hp: 100,
-      inventory: { fruit: 0, meat: 0, wood: 0, stone: 0, leather: 0, flint: 0 },
+      hp: getPlayerMaxHp(),
+      maxHp: getPlayerMaxHp(),
+      inventory: { fruit: 0, meat: 0, wood: 0, stone: 0, leather: 0, flint: 0, thickBranch: 0 },
       achievements: [],
     }));
     generationIndex = 0;
@@ -3149,19 +3256,14 @@
     ctx.stroke();
   }
 
-  // 小さい森: 低い草束。横に広がる軽いシルエットで「果物が採れそう」な印象。
+  // 小さい森: 低い木がまばら。短い幹 + 丸い小さな樹冠で「低木」を表す。
   function drawSmallForest(sx, sy, x, y) {
-    // 中央の草束（扇状に伸びる細い線）
-    gline(sx, sy, [12, 27, 9, 17], 2);
-    gline(sx, sy, [14, 27, 14, 14], 2);
-    gline(sx, sy, [16, 27, 15, 13], 2);
-    gline(sx, sy, [16, 27, 19, 14], 2);
-    gline(sx, sy, [18, 27, 22, 16], 2);
-    gline(sx, sy, [20, 28, 24, 19], 2);
-    // 横へ広がる小さな下草
-    gline(sx, sy, [3, 28, 6, 23], 2);
-    gline(sx, sy, [27, 28, 25, 22], 2);
-    if (seededNoise(x, y) > 0.55) gline(sx, sy, [6, 28, 8, 24], 2);
+    // 低い木1（やや大きめ）
+    gcircle(sx, sy, 11, 16, 5, 2);
+    gline(sx, sy, [11, 21, 11, 27], 2);
+    // 低い木2（さらに小さく、離して配置）
+    gcircle(sx, sy, 22, 20, 4, 2);
+    gline(sx, sy, [22, 24, 22, 28], 2);
   }
 
   // 大きい森: 丸い樹冠を持つ木を複数。草束より高く密度が高く「枝が採れそう」な森。
@@ -3231,6 +3333,14 @@
       gline(sx, sy, [14, 15, 19, 20], 1.5);
       return;
     }
+    if (resourceType === Resource.THICK_BRANCH) {
+      // 太い枝: 通常の枝より太い主幹 + 力強い分岐2本。
+      gline(sx, sy, [7, 27, 23, 8], 3.5);
+      gline(sx, sy, [13, 21, 20, 17], 3);
+      gline(sx, sy, [17, 15, 12, 11], 3);
+      gline(sx, sy, [20, 12, 26, 12], 3);
+      return;
+    }
   }
 
   function drawBase(base, cameraX, cameraY) {
@@ -3240,10 +3350,12 @@
     if (base.type === "CAMP") {
       drawCamp(sx, sy, lv);
     } else {
-      // BASE: 三角屋根の小屋。CAMP より一回り大きく本拠感を出す。
-      gline(sx, sy, [5, 16, 16, 6, 27, 16], 2);          // 屋根
-      gline(sx, sy, [8, 16, 8, 28, 24, 28, 24, 16], 2);  // 壁
-      gline(sx, sy, [13, 28, 13, 21, 19, 21, 19, 28], 2); // 入口
+      // BASE: 原始的な大型テント（幕）。家の屋根+壁ではなく、三角の布+支柱+入口線で表す。
+      gline(sx, sy, [3, 29, 16, 4, 29, 29], 2);          // 三角テントの布
+      gline(sx, sy, [3, 29, 29, 29], 1.5);               // 裾（地面線）
+      gline(sx, sy, [16, 4, 12, 1], 1.5);                // 支柱（左に突き出る）
+      gline(sx, sy, [16, 4, 20, 1], 1.5);                // 支柱（右に突き出る）
+      gline(sx, sy, [13, 29, 16, 17, 19, 29], 2);        // 入口（三角の開口）
     }
     if (lv >= 2) {
       const label = `L${lv}`;
@@ -3895,6 +4007,7 @@
     if (state.understoodStone) storeParts.push(`S${tr.stone || 0}`);
     if (state.huntingUnlocked) storeParts.push(`L${tr.leather || 0}`);
     if (state.understoodStone) storeParts.push(`FL${tr.flint || 0}`);
+    if (state.discoveries.craft_stone_axe) storeParts.push(`TB${tr.thickBranch || 0}`);
     const storeText = storeParts.join(" ");
     const storeW = measurePixelText(storeText) * 2;
     drawPixelTextScaled(storeText, GAME_X + PLAY_W - storeW - 10, 8, 2, "#fff");
@@ -3903,7 +4016,7 @@
       drawPixelTextScaled(tag, GAME_X + Math.floor((PLAY_W - measurePixelText(tag) * 2) / 2), 8, 2, "#f80");
     }
     const p = state.player;
-    drawUiGauge("HP", Math.max(0, p.hp) / 100, GAME_X + 10, HUD_Y + 10, 96);
+    drawUiGauge("HP", Math.max(0, p.hp) / (p.maxHp || 100), GAME_X + 10, HUD_Y + 10, 96);
     const cap = getPlayerCapacity();
     drawUiGauge("BAG", inventoryTotal(p.inventory) / cap, GAME_X + 166, HUD_Y + 10, 66, `${inventoryTotal(p.inventory)}/${cap}`);
     drawPixelTextScaled(`ATK${state.tribeAtk} INT${state.tribeInt}`, GAME_X + PLAY_W - 222, HUD_Y + 12, 2, "#fff");
@@ -4069,10 +4182,11 @@
       if (state.huntingUnlocked) write(`MEAT   ${state.tribe.meat || 0}`);
       if (state.huntingUnlocked) write(`LEATHR ${state.tribe.leather || 0}`);
       if (state.understoodStone) write(`FLINT  ${state.tribe.flint || 0}`);
+      if (state.discoveries.craft_stone_axe) write(`THICK BRANCH ${state.tribe.thickBranch || 0}`);
     } else if (gameMenuIndex === 1) {
       write(`NAME ${romanName(p.name)}`);
       write(`AGE ${p.age}`);
-      write(`HP ${Math.round(p.hp)}/100`);
+      write(`HP ${Math.round(p.hp)}/${p.maxHp || 100}`);
       write(`LIFE ${Math.ceil(getLifeTurnsLeft() / TURNS_PER_YEAR)}Y`);
       write(`BAG ${carried}/${cap}`);
     } else if (gameMenuIndex === 2) {
@@ -4138,6 +4252,7 @@
       { key: "meat",    label: "MEAT  ", flag: state.huntingUnlocked },
       { key: "leather", label: "LEATHR", flag: state.huntingUnlocked },
       { key: "flint",   label: "FLINT ", flag: state.understoodStone },
+      { key: "thickBranch", label: "THICK ", flag: state.discoveries.craft_stone_axe },
     ];
     let sY = y + 46;
     for (const item of storageItems) {
@@ -4244,13 +4359,13 @@
       // 未踏エリア: 点線枠 + "?"
       dottedFrame(1, 6, 2);
       drawPixelTextScaled("?", csx + 11, csy + 11, 2, GLYPH);
+    } else if (status === "outOfView") {
+      // 画面外: 点線枠
+      dottedFrame(1, 6, 2);
     } else if (status === "tooClose") {
       // 近すぎ: ×印
       solidFrame(0, 1);
       crossX();
-    } else if (status === "tooFar") {
-      // 遠すぎ: 薄い点線枠（まばらな点）
-      dottedFrame(1, 11, 2);
     } else {
       // 地形NG: 斜線
       solidFrame(0, 1);
@@ -4259,30 +4374,16 @@
   }
 
   function drawCampRangeIndicators(cameraX, cameraY) {
-    // 色を使わず、最大距離=点線 / 近接禁止=まばらな×印 で表す。
+    // 近接禁止範囲(3マス以内)の境界に小さな×印をまばらに描く。最大距離制限は廃止。
     // 画面内かつ既踏のタイルだけ描画する。
     ctx.fillStyle = GLYPH;
-    const ringTiles = (base, radius, step) => {
-      const out = [];
-      for (let angle = 0; angle < 360; angle += step) {
-        const rad = (angle * Math.PI) / 180;
-        const tx = Math.round(base.x + Math.cos(rad) * radius);
-        const ty = Math.round(base.y + Math.sin(rad) * radius);
-        if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
-        if (!isSeenTile(tx, ty)) continue; // 未踏エリアは表示しない
-        out.push({ tx, ty });
-      }
-      return out;
-    };
     for (const base of state.bases) {
-      // 最大距離境界: 点線
-      for (const { tx, ty } of ringTiles(base, campPlaceMaxForBase(base), 3)) {
-        const sx = Math.floor(tx * TILE_SIZE - cameraX) + TILE_SIZE / 2 - 1;
-        const sy = Math.floor(ty * TILE_SIZE - cameraY) + TILE_SIZE / 2 - 1;
-        ctx.fillRect(sx, sy, 2, 2);
-      }
-      // 近接禁止範囲: 小さい×印をまばらに
-      for (const { tx, ty } of ringTiles(base, MIN_CAMP_DISTANCE, 30)) {
+      for (let angle = 0; angle < 360; angle += 30) {
+        const rad = (angle * Math.PI) / 180;
+        const tx = Math.round(base.x + Math.cos(rad) * (MIN_CAMP_DISTANCE + 0.5));
+        const ty = Math.round(base.y + Math.sin(rad) * (MIN_CAMP_DISTANCE + 0.5));
+        if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
+        if (!isSeenTile(tx, ty) || !isOnScreen(tx, ty)) continue;
         const sx = Math.floor(tx * TILE_SIZE - cameraX) + TILE_SIZE / 2;
         const sy = Math.floor(ty * TILE_SIZE - cameraY) + TILE_SIZE / 2;
         for (let i = -2; i <= 2; i += 1) {
@@ -4409,7 +4510,7 @@
   function debugToggleImmortal() {
     state.debugImmortal = !state.debugImmortal;
     if (state.debugImmortal) {
-      if (state.player) state.player.hp = 100;
+      if (state.player) state.player.hp = getPlayerMaxHp();
       addLog("IMMORTAL ON");
     } else {
       addLog("IMMORTAL OFF");
@@ -4472,6 +4573,7 @@
     state.tribe.meat    = (state.tribe.meat    || 0) + 20;
     state.tribe.leather = (state.tribe.leather || 0) + 30;
     state.tribe.flint   = (state.tribe.flint   || 0) + 30;
+    state.tribe.thickBranch = (state.tribe.thickBranch || 0) + 20;
     clampInventory();
     addLog("DEBUG ADD RESOURCES");
     state.systemMenuOpen = false;
@@ -5093,17 +5195,22 @@
       else if (inv.stone > 0) inv.stone -= 1;
       else if (inv.leather > 0) inv.leather -= 1;
       else if (inv.flint > 0) inv.flint -= 1;
+      else if (inv.thickBranch > 0) inv.thickBranch -= 1;
       else break;
     }
   }
 
   function inventoryTotal(inv) {
     if (!inv) return 0;
-    return (inv.fruit || 0) + (inv.meat || 0) + (inv.wood || 0) + (inv.stone || 0) + (inv.leather || 0) + (inv.flint || 0);
+    return (inv.fruit || 0) + (inv.meat || 0) + (inv.wood || 0) + (inv.stone || 0) + (inv.leather || 0) + (inv.flint || 0) + (inv.thickBranch || 0);
   }
 
   function distance(ax, ay, bx, by) {
     return Math.hypot(ax - bx, ay - by);
+  }
+
+  function chebyshev(ax, ay, bx, by) {
+    return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
   }
 
   function gridDistance(ax, ay, bx, by) {

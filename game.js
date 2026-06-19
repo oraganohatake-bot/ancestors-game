@@ -69,8 +69,8 @@
       h: 96,
       riverSourceSpacing: 12, // 川の源（高山頂）同士の最小間隔
       riverMaxSources: 4,     // 川 2〜4本程度
-      riverDenseDist: 3,      // 川からこの距離まで → 大きい森
-      riverSmallDist: 7,      // さらにこの距離まで → 小さい森
+      riverDenseDist: 2,      // 川からこの距離まで → 大きい森（帯は細め。森は別途ノイズで広げる）
+      riverSmallDist: 4,      // さらにこの距離まで → 小さい森
       highLevelPct: 0.99,     // 高山を絞る（3〜6箇所程度）
     },
     mainland: {
@@ -515,15 +515,20 @@
     // 1) 標高マップ: 弱い島マスク(外周を海にする) + フラクタルノイズ(起伏) +
     //    各地に散らした山塊ピーク。中心ドームに頼らず、山を島の各所に点在させる。
     const peaks = [];
-    // 中央のピークは控えめ（中央山塊を主役にしすぎない）。
-    peaks.push({ x: cx, y: cy, r: Math.min(MAP_W, MAP_H) * 0.07, amp: 0.34 });
-    // 衛星山塊: 角度・距離を散らして島の各地に低山群/高山を作る。
+    // 中央のピークは「細く高い峰」にする。黒石(モノリス)が頂に乗るよう高さは残しつつ、
+    // 半径を小さくして“中央山塊”が島の主役になりすぎないようにする。
+    peaks.push({ x: cx, y: cy, r: Math.min(MAP_W, MAP_H) * 0.05, amp: 0.46 });
+    // 衛星山塊: 角度・距離を散らして島の各地に低山群/高山を点在させる（8箇所）。
+    // r が小さめ＝小規模山地、amp が高い箇所＝高山を含む山塊。
     const satellites = [
-      { ang: 0.5, dist: 0.34, r: 0.085, amp: 0.50 }, // 北東寄り
-      { ang: 2.0, dist: 0.40, r: 0.070, amp: 0.46 }, // 北西寄り
-      { ang: 3.4, dist: 0.30, r: 0.060, amp: 0.40 }, // 西寄り
-      { ang: 4.4, dist: 0.42, r: 0.095, amp: 0.56 }, // 南西寄り（高山1つ）
-      { ang: 5.6, dist: 0.33, r: 0.065, amp: 0.44 }, // 南東寄り
+      { ang: 0.4, dist: 0.32, r: 0.070, amp: 0.55 }, // 北東: 山地＋高山
+      { ang: 1.2, dist: 0.46, r: 0.058, amp: 0.50 }, // 東: 小さな低山群
+      { ang: 2.1, dist: 0.38, r: 0.065, amp: 0.52 }, // 北西: 山地
+      { ang: 2.9, dist: 0.48, r: 0.052, amp: 0.48 }, // 西: 小さな低山群
+      { ang: 3.6, dist: 0.30, r: 0.055, amp: 0.50 }, // 西寄り: 小山地（川の源）
+      { ang: 4.4, dist: 0.44, r: 0.085, amp: 0.62 }, // 南西: 低山＋高山1つ
+      { ang: 5.2, dist: 0.36, r: 0.060, amp: 0.52 }, // 南: 山地
+      { ang: 5.9, dist: 0.48, r: 0.052, amp: 0.48 }, // 南東: 小さな低山群
     ];
     for (const s of satellites) {
       // seededNoise で少しジッターを与え、機械的な対称を崩す。
@@ -549,7 +554,7 @@
           const b = pk.amp * Math.exp(-(pd * pd) / (2 * pk.r * pk.r));
           if (b > peakBump) peakBump = b;
         }
-        const h = island * 0.30                              // 弱い中央バイアス（島形維持）
+        const h = island * 0.34                              // 中央バイアス（島形維持・海を絞る）
                 + fractalNoise(x * 0.06, y * 0.06, 5) * 0.42 // うねり→高所が各地に散る
                 + peakBump;                                   // 散らした山塊
         row.push(h);
@@ -570,9 +575,9 @@
     // パーセンタイルで海面/山/高山の境界を決め、地形比率を安定させる。
     flat.sort((a, b) => a - b);
     const pct = (p) => flat[Math.min(flat.length - 1, Math.floor(p * flat.length))];
-    const seaLevel = pct(0.40);   // 下位40% → 海/川
-    const mtnLevel = pct(0.885);  // 上位~11% → 山岳帯（MOUNTAIN + HIGH）
-    const highLevel = pct(0.972); // 上位~2.8% → 高山（少数だが各地に点在）
+    const seaLevel = pct(0.14);   // 下位14% → 海/川（島を大きく取り、探索できる陸を増やす）
+    const mtnLevel = pct(0.875);  // 上位~12.5% → 山岳帯（MOUNTAIN + HIGH。各地に点在）
+    const highLevel = pct(0.968); // 上位~3.2% → 高山（少数だが中央以外にも点在）
 
     // 2) 標高で素地を分類（低地はあとで川との距離で森/平原に分ける）。
     const tiles = [];
@@ -681,12 +686,12 @@
         if (tiles[y][x] !== Tile.GRASS) continue;
         const rd = dist[y][x];
         // 森の分布フィールド（川とは独立。0..1）。
-        const fn = fractalNoise(x * 0.085 + 100, y * 0.085 + 100, 4);
+        const fn = fractalNoise(x * 0.084 + 100, y * 0.084 + 100, 4);
         let t = Tile.GRASS;
-        if (rd <= RIVER_DENSE_DIST) t = Tile.DEEP_FOREST;       // 川沿い: 濃い森
+        if (rd <= RIVER_DENSE_DIST) t = Tile.DEEP_FOREST;       // 川沿い: 濃い森（細い帯）
         else if (rd <= RIVER_SMALL_DIST) t = Tile.FOREST;       // その外側: 小さい森
-        if (fn > 0.62) t = Tile.DEEP_FOREST;                    // 森ノイズの芯: 濃い森
-        else if (fn > 0.50 && t === Tile.GRASS) t = Tile.FOREST; // 周辺: 小さい森
+        if (fn > 0.59) t = Tile.DEEP_FOREST;                    // 森ノイズの芯: 濃い森（各地のまとまり）
+        else if (fn > 0.48 && t === Tile.GRASS) t = Tile.FOREST; // 周辺＋平地内パッチ: 小さい森
         tiles[y][x] = t;
       }
     }
@@ -2996,7 +3001,7 @@
     ctx.fillRect(x, y, panelW, panelH);
     drawPixelFrame(x, y, panelW, panelH, 3, "#fff");
     drawPixelTextScaled("GAME OVER", x + 28, y + 26, 3, "#fff");
-    drawPixelTextScaled(gameOverReason || "NO TRIBE", x + 30, y + 82, 2, "#fff");
+    drawPixelTextFit(gameOverReason || "NO TRIBE", x + 30, y + 82, panelW - 60, 2, "#fff");
     const blink = Math.floor(performance.now() / 420) % 2 === 0;
     if (blink) drawPixelTextScaled("A/MENU TITLE", x + 30, y + 126, 2, "#fff");
   }
@@ -4059,10 +4064,12 @@
     ctx.fillRect(28, 44, 200, 138);
     ctx.strokeStyle = "#fff";
     ctx.strokeRect(28, 44, 200, 138);
-    drawPixelText(title, 42, 58, "#fff");
+    // 枠(28..228)の内側に収める。長い履歴名でもはみ出さないよう scale1 で省略。
+    const innerW = 228 - 12 - 42;
+    drawPixelTextFit(title, 42, 58, innerW, 1, "#fff");
     let y = 82;
     for (const line of lines) {
-      drawPixelText(line, 42, y, "#fff");
+      drawPixelTextFit(line, 42, y, innerW, 1, "#fff");
       y += 14;
     }
     drawPixelText("ACTION BACK", 42, 162, "#fff");
@@ -4182,7 +4189,8 @@
     drawUiGauge("HP", Math.max(0, p.hp) / (p.maxHp || 100), GAME_X + 10, HUD_Y + 10, 96);
     const cap = getPlayerCapacity();
     drawUiGauge("BAG", inventoryTotal(p.inventory) / cap, GAME_X + 166, HUD_Y + 10, 66, `${inventoryTotal(p.inventory)}/${cap}`);
-    drawPixelTextScaled(`ATK${state.tribeAtk} INT${state.tribeInt}`, GAME_X + PLAY_W - 222, HUD_Y + 12, 2, "#fff");
+    // ATK/INT は LIFE ラベル(右端の x-94 付近)に被らないよう幅を制限して縮める。
+    drawPixelTextFit(`ATK${state.tribeAtk} INT${state.tribeInt}`, GAME_X + PLAY_W - 224, HUD_Y + 12, 120, 2, "#fff");
     drawLifeCircle(GAME_X + PLAY_W - 18, HUD_Y + 18);
     drawControlPanel();
   }
@@ -4327,7 +4335,8 @@
     for (let i = 0; i < options.length; i += 1) {
       const lineY = y + 50 + i * 26;
       if (i === gameMenuIndex) drawOutlinedPixelTextScaled("!", x + 18, lineY, 2);
-      drawPixelTextScaled(options[i], x + 42, lineY, 2, "#fff");
+      // 左カラムは仕切り線(x+166)まで。はみ出すなら縮小/省略する。
+      drawPixelTextFit(options[i], x + 42, lineY, 166 - 42 - 8, 2, "#fff");
     }
     ctx.fillStyle = "#fff";
     ctx.fillRect(x + 166, y + 44, 3, h - 60);
@@ -4452,7 +4461,7 @@
     for (let i = 0; i < options.length; i += 1) {
       const lineY = y + 58 + i * 30;
       if (i === baseMenuIndex) drawOutlinedPixelTextScaled("!", x + 24, lineY, 2);
-      drawPixelTextScaled(options[i], x + 54, lineY, 2, "#fff");
+      drawPixelTextFit(options[i], x + 54, lineY, w - 54 - 12, 2, "#fff");
     }
   }
 

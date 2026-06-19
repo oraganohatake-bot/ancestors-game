@@ -178,14 +178,14 @@
 
   const tileInfo = {
     // モノクロ線画方針: 地面はほぼ白で統一し、形（グリフ）で識別する。
-    // 海だけはやや濃いグレーにして、海岸線が輪郭として読めるようにする。
-    [Tile.SEA]: { name: "海", color: "#c8ccd0", dark: "#777", passable: true },
+    // 海・川は明確に濃いグレーの「水タイル」として塗り、海岸線を輪郭で読ませる。
+    [Tile.SEA]: { name: "海", color: "#9ea2a6", dark: "#555", passable: true },
     [Tile.GRASS]: { name: "草原", color: "#f5f5f5", dark: "#aaa", passable: true },
     [Tile.FOREST]: { name: "小さい森", color: "#f5f5f5", dark: "#111", passable: true },
     [Tile.DEEP_FOREST]: { name: "大きい森", color: "#ededed", dark: "#000", passable: true },
     [Tile.MOUNTAIN]: { name: "山", color: "#f5f5f5", dark: "#333", passable: true },
     [Tile.HIGH_MOUNTAIN]: { name: "高い山", color: "#f5f5f5", dark: "#222", passable: true },
-    [Tile.RIVER]: { name: "川", color: "#f0f0f0", dark: "#888", passable: true },
+    [Tile.RIVER]: { name: "川", color: "#b0b4b8", dark: "#666", passable: true },
     [Tile.MONOLITH]: { name: "黒石", color: "#f5f5f5", dark: "#111", passable: true },
   };
 
@@ -321,6 +321,8 @@
     holdDir: null,
     pressedControl: null,
     moving: false,
+    dpadPointerId: null,
+    actPointerId: null,
   };
 
   let state = null;
@@ -510,14 +512,46 @@
     const cy = (MAP_H - 1) / 2;
     const maxDist = Math.hypot(cx, cy);
 
-    // 1) 標高マップ: 中心ほど高く外周ほど低い放射状の土台 + フラクタルノイズ。
+    // 1) 標高マップ: 弱い島マスク(外周を海にする) + フラクタルノイズ(起伏) +
+    //    各地に散らした山塊ピーク。中心ドームに頼らず、山を島の各所に点在させる。
+    const peaks = [];
+    // 中央のピークは控えめ（中央山塊を主役にしすぎない）。
+    peaks.push({ x: cx, y: cy, r: Math.min(MAP_W, MAP_H) * 0.07, amp: 0.34 });
+    // 衛星山塊: 角度・距離を散らして島の各地に低山群/高山を作る。
+    const satellites = [
+      { ang: 0.5, dist: 0.34, r: 0.085, amp: 0.50 }, // 北東寄り
+      { ang: 2.0, dist: 0.40, r: 0.070, amp: 0.46 }, // 北西寄り
+      { ang: 3.4, dist: 0.30, r: 0.060, amp: 0.40 }, // 西寄り
+      { ang: 4.4, dist: 0.42, r: 0.095, amp: 0.56 }, // 南西寄り（高山1つ）
+      { ang: 5.6, dist: 0.33, r: 0.065, amp: 0.44 }, // 南東寄り
+    ];
+    for (const s of satellites) {
+      // seededNoise で少しジッターを与え、機械的な対称を崩す。
+      const jx = (seededNoise(s.ang * 13.0, s.dist * 7.0) - 0.5) * 0.06;
+      const jy = (seededNoise(s.dist * 11.0, s.ang * 5.0) - 0.5) * 0.06;
+      peaks.push({
+        x: cx + Math.cos(s.ang) * (s.dist + jx) * MAP_W,
+        y: cy + Math.sin(s.ang) * (s.dist + jy) * MAP_H,
+        r: s.r * Math.min(MAP_W, MAP_H),
+        amp: s.amp,
+      });
+    }
     const height = [];
     let hMin = Infinity, hMax = -Infinity;
     for (let y = 0; y < MAP_H; y += 1) {
       const row = [];
       for (let x = 0; x < MAP_W; x += 1) {
         const d = Math.hypot(x - cx, y - cy) / maxDist; // 0(中心)..1(隅)
-        const h = (1 - d) * 0.68 + fractalNoise(x * 0.05, y * 0.05, 5) * 0.32;
+        const island = 1 - Math.pow(d, 1.7);            // 外周だけ急に落とす島マスク
+        let peakBump = 0;
+        for (const pk of peaks) {
+          const pd = Math.hypot(x - pk.x, y - pk.y);
+          const b = pk.amp * Math.exp(-(pd * pd) / (2 * pk.r * pk.r));
+          if (b > peakBump) peakBump = b;
+        }
+        const h = island * 0.30                              // 弱い中央バイアス（島形維持）
+                + fractalNoise(x * 0.06, y * 0.06, 5) * 0.42 // うねり→高所が各地に散る
+                + peakBump;                                   // 散らした山塊
         row.push(h);
         if (h < hMin) hMin = h;
         if (h > hMax) hMax = h;
@@ -536,9 +570,9 @@
     // パーセンタイルで海面/山/高山の境界を決め、地形比率を安定させる。
     flat.sort((a, b) => a - b);
     const pct = (p) => flat[Math.min(flat.length - 1, Math.floor(p * flat.length))];
-    const seaLevel = pct(0.40);   // 下位40% → 海
-    const mtnLevel = pct(0.75);   // 上位25% → 山岳帯
-    const highLevel = pct(WORLD.highLevelPct); // 上位 → 高山（少数）
+    const seaLevel = pct(0.40);   // 下位40% → 海/川
+    const mtnLevel = pct(0.885);  // 上位~11% → 山岳帯（MOUNTAIN + HIGH）
+    const highLevel = pct(0.972); // 上位~2.8% → 高山（少数だが各地に点在）
 
     // 2) 標高で素地を分類（低地はあとで川との距離で森/平原に分ける）。
     const tiles = [];
@@ -639,19 +673,45 @@
       }
     }
 
-    // 6) 森林: 低地を川からの距離で分類。近いほど濃い森。
+    // 6) 森林: 川沿い(距離) と 森ノイズ(各地のまとまり) の両方で森を生やす。
+    //    川沿いは濃い森、その外側は小さい森。さらに平地内にも森のパッチを点在させ、
+    //    歩くと数画面ごとに森が見えるようにする。
     for (let y = 0; y < MAP_H; y += 1) {
       for (let x = 0; x < MAP_W; x += 1) {
         if (tiles[y][x] !== Tile.GRASS) continue;
         const rd = dist[y][x];
-        if (rd <= RIVER_DENSE_DIST) tiles[y][x] = Tile.DEEP_FOREST;
-        else if (rd <= RIVER_SMALL_DIST) tiles[y][x] = Tile.FOREST;
-        // それ以外は平原（GRASS）のまま
+        // 森の分布フィールド（川とは独立。0..1）。
+        const fn = fractalNoise(x * 0.085 + 100, y * 0.085 + 100, 4);
+        let t = Tile.GRASS;
+        if (rd <= RIVER_DENSE_DIST) t = Tile.DEEP_FOREST;       // 川沿い: 濃い森
+        else if (rd <= RIVER_SMALL_DIST) t = Tile.FOREST;       // その外側: 小さい森
+        if (fn > 0.62) t = Tile.DEEP_FOREST;                    // 森ノイズの芯: 濃い森
+        else if (fn > 0.50 && t === Tile.GRASS) t = Tile.FOREST; // 周辺: 小さい森
+        tiles[y][x] = t;
       }
     }
 
     tiles[Math.round(cy)][Math.round(cx)] = Tile.MONOLITH; // 中心の頂＝黒石
+
+    if (DEBUG_TILE_RATIO) logTileRatios(tiles);
     return tiles;
+  }
+
+  // 開発用: 地形比率をコンソールに出して生成バランスを確認する。
+  const DEBUG_TILE_RATIO = false;
+  function logTileRatios(tiles) {
+    const count = {};
+    let total = 0;
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        const t = tiles[y][x];
+        count[t] = (count[t] || 0) + 1;
+        total += 1;
+      }
+    }
+    const name = { [Tile.SEA]: "SEA", [Tile.RIVER]: "RIVER", [Tile.GRASS]: "PLAIN", [Tile.FOREST]: "SMALL_FOREST", [Tile.DEEP_FOREST]: "DENSE_FOREST", [Tile.MOUNTAIN]: "MOUNTAIN", [Tile.HIGH_MOUNTAIN]: "HIGH_MOUNTAIN", [Tile.MONOLITH]: "MONOLITH" };
+    const lines = Object.keys(count).map((k) => `${name[k] || k}: ${(count[k] / total * 100).toFixed(1)}%`);
+    console.log("[TILE RATIO] " + lines.join("  "));
   }
 
   function findMonolith(map) {
@@ -986,6 +1046,7 @@
       state.placingCamp = false;
       state.campCursor = null;
       state.milestoneOverlay = null;
+      resetTouchControls();
       if (state.player) {
         state.player.moveEnd = 0;
         state.player.moveStart = 0;
@@ -1459,7 +1520,27 @@
            sy >= GAME_Y && sy + TILE_SIZE <= GAME_Y + PLAY_H;
   }
 
-  // 建設可否を判定。優先順位: unexplored > outOfView > terrain > tooClose > ok
+  // そのタイルに採取可能な資源ノードがあるか
+  function hasResourceAt(x, y) {
+    if (!state || !state.resources) return false;
+    const r = state.resources[`${x},${y}`];
+    return !!(r && !r.removed && !r.harvested && (r.remaining === undefined || r.remaining > 0));
+  }
+
+  // 同座標の資源ノードを消す（CAMP建設で資源が埋まり残らないように）
+  function removeResourceAt(x, y) {
+    if (!state || !state.resources) return;
+    const key = `${x},${y}`;
+    const r = state.resources[key];
+    if (r) {
+      r.removed = true;
+      r.remaining = 0;
+      r.harvested = true;
+      r.regrowTimer = 0;
+    }
+  }
+
+  // 建設可否を判定。優先順位: unexplored > outOfView > terrain > resource > tooClose > ok
   function campPlacementStatus(x, y) {
     if (!state || !state.bases) return "terrain";
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return "terrain";
@@ -1468,6 +1549,7 @@
     const t = state.map[y] && state.map[y][x];
     if (!isBuildableTile(t)) return "terrain";        // 海/川/山/高山などは不可
     if (state.bases.some((b) => b.x === x && b.y === y)) return "terrain"; // 既存拠点上は不可
+    if (hasResourceAt(x, y)) return "resource";       // 資源ノード上は不可
     // 既存BASE/CAMPから3マス以内（チェビシェフ距離）には置けない。4マス以上で可。
     for (const b of state.bases) {
       if (chebyshev(b.x, b.y, x, y) <= MIN_CAMP_DISTANCE) return "tooClose";
@@ -1495,7 +1577,7 @@
   function updateResourceRespawn() {
     if (state.resources) {
       for (const r of Object.values(state.resources)) {
-        if (r && r.remaining <= 0 && r.regrowTimer > 0) {
+        if (r && !r.removed && r.remaining <= 0 && r.regrowTimer > 0) {
           r.regrowTimer -= 1;
           if (r.regrowTimer <= 0) {
             r.remaining = r.maxRemaining;
@@ -1752,6 +1834,7 @@
   function showMilestone(title, visionText) {
     if (!state) return;
     closeAllMenusForMilestone();
+    resetTouchControls();
     state.milestoneOverlay = {
       title,
       text: visionText,
@@ -1768,8 +1851,17 @@
       state.milestoneOverlay = null;
       return;
     }
-    const panelW = Math.min(380, PLAY_W - 48);
-    const panelH = 110;
+    const panelW = Math.min(400, PLAY_W - 32);
+    const innerW = panelW - 28;
+    // タイトル/本文を枠幅で折り返し、行数に応じてパネル高さを決める（はみ出さない）。
+    const titleLines = wrapPixelByWidth(ov.title, innerW, 3);
+    const titleScale = titleLines.length > 1 ? 2 : 3; // 折り返したら少し縮める
+    const titleWrapped = wrapPixelByWidth(ov.title, innerW, titleScale);
+    const bodyLines = wrapPixelByWidth(ov.text, innerW, 2);
+    const titleLH = 8 * titleScale;
+    const bodyLH = 18;
+    const titleBlockH = titleWrapped.length * titleLH;
+    const panelH = 16 + titleBlockH + 12 + bodyLines.length * bodyLH + 12;
     const px = GAME_X + Math.floor((PLAY_W - panelW) / 2);
     const py = GAME_Y + Math.floor((PLAY_H - panelH) / 2);
     ctx.save();
@@ -1778,14 +1870,15 @@
     ctx.fillStyle = "rgba(0,0,0,0.95)";
     ctx.fillRect(px, py, panelW, panelH);
     drawPixelFrame(px, py, panelW, panelH, 2, "#fff");
-    const titleScale = 3;
-    const titleW = measurePixelText(ov.title) * titleScale;
-    const titleX = px + Math.floor((panelW - titleW) / 2);
-    drawPixelTextScaled(ov.title, titleX, py + 14, titleScale, "#fff");
-    const textScale = 2;
-    const textW = measurePixelText(ov.text) * textScale;
-    const textX = px + Math.floor((panelW - textW) / 2);
-    drawPixelTextScaled(ov.text, textX, py + 52, textScale, "#aaa");
+    titleWrapped.forEach((ln, i) => {
+      const w = measurePixelText(ln) * titleScale;
+      drawPixelTextScaled(ln, px + Math.floor((panelW - w) / 2), py + 16 + i * titleLH, titleScale, "#fff");
+    });
+    let by = py + 16 + titleBlockH + 12;
+    bodyLines.forEach((ln, i) => {
+      const w = measurePixelText(ln) * 2;
+      drawPixelTextScaled(ln, px + Math.floor((panelW - w) / 2), by + i * bodyLH, 2, "#aaa");
+    });
     ctx.restore();
   }
 
@@ -2474,7 +2567,7 @@
     if (!state.placingCamp || !state.campCursor) return;
     const { x, y } = state.campCursor;
     const status = campPlacementStatus(x, y);
-    // 失敗ログ優先順位: UNEXPLORED > OUT OF VIEW > BLOCKED TERRAIN > TOO CLOSE > NOT ENOUGH RESOURCE
+    // 失敗ログ優先順位: UNEXPLORED > OUT OF VIEW > BLOCKED TERRAIN > RESOURCE HERE > TOO CLOSE > NOT ENOUGH RESOURCE
     if (status === "unexplored") {
       addLog("UNEXPLORED AREA");
       return;
@@ -2485,6 +2578,10 @@
     }
     if (status === "terrain") {
       addLog("BLOCKED TERRAIN");
+      return;
+    }
+    if (status === "resource") {
+      addLog("RESOURCE HERE");
       return;
     }
     if (status === "tooClose") {
@@ -2507,6 +2604,8 @@
     state.tribe.wood -= CAMP_COST.wood;
     state.tribe.stone -= CAMP_COST.stone;
     state.tribe.leather -= CAMP_COST.leather;
+    // 保険: 例外的に資源と重なっていた場合でも建設後に資源が残らないよう消す。
+    removeResourceAt(x, y);
     state.bases.push({ x, y, type: "CAMP", name: "野営地", level: 1 });
     revealAroundBases();
     state.placingCamp = false;
@@ -2864,8 +2963,8 @@
     const chosen = generationCandidates[generationIndex];
     if (chosen) {
       const statY = y + panelH - 68;
-      drawPixelTextScaled(`SELECTED N${generationIndex + 1}`, x + 18, statY, 2, "#fff");
-      drawPixelTextScaled(`AGE ${chosen.age}  WIS ${chosen.inheritedWisdom}  INT ${chosen.intelligence}  ATK ${chosen.strength}`, x + 18, statY + 22, 2, "#fff");
+      drawPixelTextFit(`SELECTED N${generationIndex + 1}`, x + 18, statY, panelW - 36, 2, "#fff");
+      drawPixelTextFit(`AGE ${chosen.age}  WIS ${chosen.inheritedWisdom}  INT ${chosen.intelligence}  ATK ${chosen.strength}`, x + 18, statY + 22, panelW - 36, 2, "#fff");
     }
   }
 
@@ -3242,8 +3341,8 @@
       drawHighMountain(sx, sy);
     }
     if (tile === Tile.SEA) {
-      // 海: 控えめな波線のみ。海岸線は陸との明度差で読ませる。
-      ctx.strokeStyle = "#9aa0a6";
+      // 海: タイル全面が濃いグレーの水面。明るめの小波 + 海岸線で陸と区別する。
+      ctx.strokeStyle = "#cdd1d5";
       ctx.lineWidth = 1.5;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
@@ -3251,6 +3350,7 @@
       ctx.moveTo(sx + 6, sy + 12); ctx.lineTo(sx + 9, sy + 10); ctx.lineTo(sx + 12, sy + 12); ctx.lineTo(sx + 15, sy + 10);
       ctx.moveTo(sx + 18, sy + 21); ctx.lineTo(sx + 21, sy + 19); ctx.lineTo(sx + 24, sy + 21); ctx.lineTo(sx + 27, sy + 19);
       ctx.stroke();
+      drawWaterCoastline(sx, sy, x, y);
     }
     if (tile === Tile.RIVER) {
       drawRiverChannel(sx, sy, x, y);
@@ -3270,34 +3370,38 @@
     }
   }
 
-  // 川: 接続する隣接（川・海）方向へ中心から細い流路を描き、連続した一本に見せる。
-  function drawRiverChannel(sx, sy, x, y) {
-    const isWater = (gx, gy) => {
-      if (gy < 0 || gy >= state.map.length || gx < 0 || gx >= state.map[0].length) return false;
-      const t = state.map[gy][gx];
-      return t === Tile.RIVER || t === Tile.SEA;
-    };
-    const ends = [];
-    if (isWater(x, y - 1)) ends.push([16, 0]);
-    if (isWater(x, y + 1)) ends.push([16, 32]);
-    if (isWater(x - 1, y)) ends.push([0, 16]);
-    if (isWater(x + 1, y)) ends.push([32, 16]);
-    glyphSetup(3);
-    ctx.strokeStyle = "#7d8893";
+  function isWaterTile(gx, gy) {
+    if (!state.map || gy < 0 || gy >= state.map.length || gx < 0 || gx >= state.map[0].length) return false;
+    const t = state.map[gy][gx];
+    return t === Tile.RIVER || t === Tile.SEA;
+  }
+
+  // 水タイル（海・川）の、陸と接する辺に濃い海岸線を描く。連続した水面の輪郭になる。
+  function drawWaterCoastline(sx, sy, x, y) {
+    ctx.strokeStyle = "#4a4a4a";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "butt";
     ctx.beginPath();
-    if (ends.length === 0) {
-      // 孤立: 短い流れの記号
-      ctx.moveTo(sx + 8, sy + 18);
-      ctx.lineTo(sx + 14, sy + 14);
-      ctx.lineTo(sx + 20, sy + 18);
-      ctx.lineTo(sx + 24, sy + 14);
-    } else {
-      for (const [ex, ey] of ends) {
-        ctx.moveTo(sx + 16, sy + 16);
-        ctx.lineTo(sx + ex, sy + ey);
-      }
-    }
+    if (!isWaterTile(x, y - 1)) { ctx.moveTo(sx, sy + 1); ctx.lineTo(sx + TILE_SIZE, sy + 1); }
+    if (!isWaterTile(x, y + 1)) { ctx.moveTo(sx, sy + TILE_SIZE - 1); ctx.lineTo(sx + TILE_SIZE, sy + TILE_SIZE - 1); }
+    if (!isWaterTile(x - 1, y)) { ctx.moveTo(sx + 1, sy); ctx.lineTo(sx + 1, sy + TILE_SIZE); }
+    if (!isWaterTile(x + 1, y)) { ctx.moveTo(sx + TILE_SIZE - 1, sy); ctx.lineTo(sx + TILE_SIZE - 1, sy + TILE_SIZE); }
     ctx.stroke();
+  }
+
+  // 川: タイル全面を水面色で塗った上に、明るい小波で水面を表す。
+  // 線ではなく「連続した水のタイル列」として見せ、陸との境に海岸線を描く。
+  function drawRiverChannel(sx, sy, x, y) {
+    // 水面の小波（海と同じトーンで連続感を出す）
+    ctx.strokeStyle = "#d6dadd";
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(sx + 7, sy + 11); ctx.lineTo(sx + 11, sy + 9); ctx.lineTo(sx + 15, sy + 11);
+    ctx.moveTo(sx + 17, sy + 22); ctx.lineTo(sx + 21, sy + 20); ctx.lineTo(sx + 25, sy + 22);
+    ctx.stroke();
+    drawWaterCoastline(sx, sy, x, y);
   }
 
   // 小さい森: 低い木がまばら。短い幹 + 丸い小さな樹冠で「低木」を表す。
@@ -3992,16 +4096,20 @@
     ctx.fillStyle = "#111";
     ctx.fillRect(x, y, w, 26);
     drawPixelFrame(x, y, w, 26, 2, "#fff");
-    drawPixelTextScaled(text, x + Math.floor((w - textW) / 2), y + 6, 2, "#fff");
+    // 枠幅に収める（長文でもはみ出さない）。
+    drawPixelTextFit(text, x + 9, y + 6, w - 18, 2, "#fff", "center");
   }
 
   function drawEmergencyNotice(text) {
-    const textW = measurePixelText(text) * 2;
-    const x = Math.floor(GAME_X + (PLAY_W - textW) / 2);
-    const y = Math.floor(GAME_Y + (PLAY_H - 14) / 2);
     const phase = (performance.now() % 420) / 420;
     if (phase >= 0.55) return;
-    drawOutlinedPixelTextScaled(text, x, y, 2);
+    const maxW = PLAY_W - 24;
+    let scale = measurePixelText(text) * 2 > maxW ? 1 : 2;
+    const textW = measurePixelText(text) * scale;
+    const x = Math.floor(GAME_X + (PLAY_W - Math.min(textW, maxW)) / 2);
+    const y = Math.floor(GAME_Y + (PLAY_H - 14) / 2);
+    if (scale === 2) drawOutlinedPixelTextScaled(text, x, y, 2);
+    else drawPixelTextFit(text, x, y, maxW, 1, "#fff", "left");
   }
 
   function drawHudText() {
@@ -4224,9 +4332,10 @@
     ctx.fillStyle = "#fff";
     ctx.fillRect(x + 166, y + 44, 3, h - 60);
     const detailX = x + 188;
+    const detailMaxW = x + w - 12 - detailX;
     let detailY = y + 50;
     const write = (text) => {
-      drawPixelTextScaled(text, detailX, detailY, 2, "#fff");
+      drawPixelTextFit(text, detailX, detailY, detailMaxW, 2, "#fff");
       detailY += 22;
     };
     if (gameMenuIndex === 0) {
@@ -4292,9 +4401,12 @@
       const lineY = y + 58 + i * 30;
       const selected = i === craftMenuIndex;
       if (selected) drawOutlinedPixelTextScaled("!", x + 24, lineY, 2);
-      drawPixelTextScaled(options[i], x + 54, lineY, 2, "#fff");
+      // 左半分（ストレージ列の手前）に収める。< > と重ならないよう余白を確保。
+      const arrowX = x + Math.floor(w / 2) - 34;
+      const optMaxW = arrowX - 8 - (x + 54);
+      drawPixelTextFit(options[i], x + 54, lineY, optMaxW, 2, "#fff");
       if (selected && (i === 0 || i === 1)) {
-        drawPixelTextScaled("< >", x + w - 60, lineY, 2, "#fff");
+        drawPixelTextScaled("< >", arrowX, lineY, 2, "#fff");
       }
     }
     // Tribe storage column
@@ -4309,10 +4421,11 @@
       { key: "flint",   label: "FLINT ", flag: state.understoodStone },
       { key: "thickBranch", label: "THICK ", flag: state.discoveries.craft_stone_axe },
     ];
+    const storageMaxW = x + w - 12 - storageX;
     let sY = y + 46;
     for (const item of storageItems) {
       if (!item.always && !item.flag) continue;
-      drawPixelTextScaled(`${item.label} ${state.tribe[item.key] || 0}`, storageX, sY, 2, "#aaa");
+      drawPixelTextFit(`${item.label} ${state.tribe[item.key] || 0}`, storageX, sY, storageMaxW, 2, "#aaa");
       sY += 22;
     }
     if (knownRecipes.length > 0) {
@@ -4321,7 +4434,7 @@
       ctx.fillRect(x + 12, kY - 4, w - 24, 1);
       drawPixelTextScaled("KNOWN", x + 22, kY + 4, 2, "#fff");
       knownRecipes.forEach((r, i) => {
-        drawPixelTextScaled(r.name, x + 22, kY + 24 + i * 30, 2, "#888");
+        drawPixelTextFit(r.name, x + 22, kY + 24 + i * 30, w - 44, 2, "#888");
       });
     }
   }
@@ -4417,6 +4530,12 @@
     } else if (status === "outOfView") {
       // 画面外: 点線枠
       dottedFrame(1, 6, 2);
+    } else if (status === "resource") {
+      // 資源あり: 枠 + 中央に小さな塊印（資源が埋まっていることを示す）
+      solidFrame(0, 1);
+      ctx.beginPath();
+      ctx.arc(csx + S / 2, csy + S / 2, 5, 0, Math.PI * 2);
+      ctx.fill();
     } else if (status === "tooClose") {
       // 近すぎ: ×印
       solidFrame(0, 1);
@@ -4522,14 +4641,14 @@
     for (let i = 0; i < options.length; i += 1) {
       const lineY = y + 56 + i * 30;
       if (i === systemMenuIndex) drawOutlinedPixelTextScaled("!", x + 18, lineY, 2);
-      const isDebug = options[i].startsWith("[DEBUG]");
-      drawPixelTextScaled(options[i], x + 42, lineY, 2, isDebug ? "#f80" : "#fff");
+      const isDebug = options[i].startsWith("DEBUG");
+      drawPixelTextFit(options[i], x + 42, lineY, x + w - 12 - (x + 42), 2, isDebug ? "#f80" : "#fff");
     }
   }
 
   function getSystemMenuOptions() {
     const immortal = state && state.debugImmortal ? "ON" : "OFF";
-    return ["SAVE AUTO", "LOAD TITLE", "RESET SAVE", "[DEBUG] UNLOCK ALL", "[DEBUG] ADD RESOURCES", "[DEBUG] POP +5", `[DEBUG] IMMORTAL: ${immortal}`];
+    return ["SAVE AUTO", "LOAD TITLE", "RESET SAVE", "DEBUG: UNLOCK ALL", "DEBUG: ADD RES", "DEBUG: POP +5", `DEBUG: IMMORTAL ${immortal}`];
   }
 
   function moveSystemMenuSelection(delta) {
@@ -4551,13 +4670,13 @@
       resetSave();
       state.systemMenuOpen = false;
       mode = "title";
-    } else if (selected === "[DEBUG] UNLOCK ALL") {
+    } else if (selected === "DEBUG: UNLOCK ALL") {
       debugUnlockAll();
-    } else if (selected === "[DEBUG] ADD RESOURCES") {
+    } else if (selected === "DEBUG: ADD RES") {
       debugAddResources();
-    } else if (selected === "[DEBUG] POP +5") {
+    } else if (selected === "DEBUG: POP +5") {
       debugPopPlus5();
-    } else if (selected.startsWith("[DEBUG] IMMORTAL")) {
+    } else if (selected.startsWith("DEBUG: IMMORTAL")) {
       debugToggleImmortal();
     }
   }
@@ -4848,6 +4967,63 @@
     return lines;
   }
 
+  // 幅(px)で折り返し。単語単位、長すぎる単語は文字単位で分割する。
+  function wrapPixelByWidth(text, maxWidth, scale) {
+    const words = String(text).toUpperCase().split(" ");
+    const lines = [];
+    let line = "";
+    const fits = (str) => measurePixelText(str) * scale <= maxWidth;
+    for (let w of words) {
+      while (!fits(w) && w.length > 1) {
+        let cut = w.length;
+        while (cut > 1 && !fits(w.slice(0, cut))) cut -= 1;
+        if (line) { lines.push(line); line = ""; }
+        lines.push(w.slice(0, cut));
+        w = w.slice(cut);
+      }
+      const next = line ? `${line} ${w}` : w;
+      if (!fits(next) && line) { lines.push(line); line = w; }
+      else line = next;
+    }
+    if (line) lines.push(line);
+    return lines.length ? lines : [""];
+  }
+
+  // 1行で maxWidth に収める。超えたら scale を下げ、最小でも無理なら末尾を省略(".")。
+  // align: "left" | "center" | "right"。戻り値は採用した scale。
+  function drawPixelTextFit(text, x, y, maxWidth, scale = 2, color = "#fff", align = "left", minScale = 1) {
+    let s = scale;
+    let str = String(text).toUpperCase();
+    while (s > minScale && measurePixelText(str) * s > maxWidth) s -= 1;
+    if (measurePixelText(str) * s > maxWidth) {
+      while (str.length > 1 && measurePixelText(`${str}.`) * s > maxWidth) str = str.slice(0, -1);
+      str += ".";
+    }
+    let dx = x;
+    const w = measurePixelText(str) * s;
+    if (align === "center") dx = x + Math.floor((maxWidth - w) / 2);
+    else if (align === "right") dx = x + (maxWidth - w);
+    drawPixelTextScaled(str, dx, y, s, color);
+    return s;
+  }
+
+  // maxWidth で折り返して複数行描画。maxLines を超える場合は scale を下げて収める。
+  // 戻り値: { lines, scale, height }。
+  function drawPixelTextWrapped(text, x, y, maxWidth, scale = 2, lineHeight = 0, color = "#fff", align = "left", maxLines = 99) {
+    let s = scale;
+    let lines = wrapPixelByWidth(text, maxWidth, s);
+    while (s > 1 && lines.length > maxLines) { s -= 1; lines = wrapPixelByWidth(text, maxWidth, s); }
+    const lh = lineHeight || (9 * s);
+    lines.forEach((ln, i) => {
+      let dx = x;
+      const w = measurePixelText(ln) * s;
+      if (align === "center") dx = x + Math.floor((maxWidth - w) / 2);
+      else if (align === "right") dx = x + (maxWidth - w);
+      drawPixelTextScaled(ln, dx, y + i * lh, s, color);
+    });
+    return { lines: lines.length, scale: s, height: lines.length * lh };
+  }
+
   function hashText(text) {
     let hash = 0;
     for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
@@ -5057,11 +5233,15 @@
     event.preventDefault();
     input.pressedControl = control.id;
     if (control.dir) {
+      // D-pad is tracked by its own pointerId so a second finger (ACT) can't
+      // steal or strand the direction input.
+      if (input.dpadPointerId === null) input.dpadPointerId = event.pointerId;
       tryMove(control.dir[0], control.dir[1]);
       startHeldMove(control.dir[0], control.dir[1]);
       return;
     }
     if (control.id === "action") {
+      input.actPointerId = event.pointerId;
       doAction();
     }
     if (control.id === "menu") showMenu();
@@ -5069,14 +5249,42 @@
   }
 
   function handleCanvasPointerUp(event) {
-    const wasDir = ["up", "left", "right", "down"].includes(input.pressedControl);
-    input.pressedControl = null;
-    if (wasDir) {
+    const pid = event ? event.pointerId : null;
+    let handled = false;
+    // Release the D-pad only when its own finger lifts — not when ACT lifts.
+    if (pid !== null && pid === input.dpadPointerId) {
+      input.dpadPointerId = null;
       input.mobileX = 0;
       input.mobileY = 0;
       stopHeldMove();
+      if (["up", "left", "right", "down"].includes(input.pressedControl)) input.pressedControl = null;
+      handled = true;
+    }
+    if (pid !== null && pid === input.actPointerId) {
+      input.actPointerId = null;
+      if (input.pressedControl === "action") input.pressedControl = null;
+      handled = true;
+    }
+    if (!handled) {
+      // Menu/other pointers: clear single-control highlight and any stray move.
+      const wasDir = ["up", "left", "right", "down"].includes(input.pressedControl);
+      input.pressedControl = null;
+      if (wasDir) {
+        input.mobileX = 0;
+        input.mobileY = 0;
+        stopHeldMove();
+      }
     }
     if (event && event.preventDefault) event.preventDefault();
+  }
+
+  function resetTouchControls() {
+    input.dpadPointerId = null;
+    input.actPointerId = null;
+    input.pressedControl = null;
+    input.mobileX = 0;
+    input.mobileY = 0;
+    stopHeldMove();
   }
 
   function getCanvasPoint(event) {
@@ -5296,15 +5504,18 @@
     return Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
 
-  window.addEventListener("resize", scheduleResizeCanvas);
+  window.addEventListener("resize", () => { resetTouchControls(); scheduleResizeCanvas(); });
   // orientation 変更直後は innerHeight/visualViewport の更新が遅れるため、
   // 即時 + 遅延の多段で再計算してズレを防ぐ。
-  window.addEventListener("orientationchange", scheduleResizeCanvas);
+  window.addEventListener("orientationchange", () => { resetTouchControls(); scheduleResizeCanvas(); });
   window.addEventListener("load", scheduleResizeCanvas);
+  // 画面を離れた／回転した時に押しっぱなしのタッチ入力が残らないよう全リセット。
+  window.addEventListener("blur", resetTouchControls);
   // スリープ→復帰時。resize/orientationchange が発火しないことがあるため、
   // タブが再表示されたタイミング（visibilitychange / pageshow / focus）でも
   // 再レイアウトしてズレを補正する。
   document.addEventListener("visibilitychange", () => {
+    resetTouchControls();
     if (!document.hidden) {
       scheduleResizeCanvas();
     }
@@ -5531,6 +5742,7 @@
   canvas.addEventListener("pointerup", handleCanvasPointerUp);
   canvas.addEventListener("pointercancel", handleCanvasPointerUp);
   canvas.addEventListener("pointerleave", handleCanvasPointerUp);
+  canvas.addEventListener("lostpointercapture", handleCanvasPointerUp);
 
   const dirMap = {
     up: [0, -1],

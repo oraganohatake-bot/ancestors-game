@@ -507,6 +507,7 @@
   const RIVER_MAX_SOURCES = WORLD.riverMaxSources;
   const RIVER_DENSE_DIST = WORLD.riverDenseDist;   // 川からこの距離まで → 大きい森
   const RIVER_SMALL_DIST = WORLD.riverSmallDist;   // さらにこの距離まで → 小さい森
+  const EDGE_SEA_MARGIN = 2;                        // 外周この枚数は必ず海（島を海で閉じる）
   function generateIslandMap() {
     const cx = (MAP_W - 1) / 2;
     const cy = (MAP_H - 1) / 2;
@@ -593,6 +594,16 @@
       tiles.push(row);
     }
 
+    // 外周マージンは必ず海にして、島の輪郭を海で閉じる。
+    for (let y = 0; y < MAP_H; y += 1) {
+      for (let x = 0; x < MAP_W; x += 1) {
+        if (x < EDGE_SEA_MARGIN || y < EDGE_SEA_MARGIN ||
+            x >= MAP_W - EDGE_SEA_MARGIN || y >= MAP_H - EDGE_SEA_MARGIN) {
+          tiles[y][x] = Tile.SEA;
+        }
+      }
+    }
+
     const N4 = [[0, -1], [1, 0], [0, 1], [-1, 0]];
     const N8 = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
 
@@ -630,28 +641,46 @@
       if (sources.length >= RIVER_MAX_SOURCES) break;
     }
 
-    // 4) 川生成: 各源から最急降下で海まで一本の連続した線を流す（途切れない）。
+    // 4) 川生成: 各源から「海まで必ず届く」連続した水路を引く。
+    //    上下左右(4近傍)のみで標高の低い谷を優先するダイクストラ最短経路を、
+    //    源から最寄りの海まで求める。これにより
+    //      - 川タイルは必ず辺で接続（斜め接続なし）
+    //      - 途中で途切れず必ず海へ注ぐ（内陸で行き止まらない）
+    //    を保証する。経路は谷を辿るので自然な蛇行になる。
     const isRiver = [];
     for (let y = 0; y < MAP_H; y += 1) isRiver.push(new Array(MAP_W).fill(false));
-    for (const src of sources) {
-      let x = src.x, y = src.y;
-      const visited = new Set();
-      for (let step = 0; step < 800; step += 1) {
-        visited.add(y * MAP_W + x);
-        if (tiles[y][x] === Tile.SEA) break;
-        if (tiles[y][x] !== Tile.HIGH_MOUNTAIN) isRiver[y][x] = true; // 頂は山のまま残す
-        let best = null, bh = Infinity;
-        for (const [dx, dy] of N8) {
+    const carveRiverToSea = (src) => {
+      const cost = new Array(MAP_W * MAP_H).fill(Infinity);
+      const prev = new Array(MAP_W * MAP_H).fill(-1);
+      const startK = src.y * MAP_W + src.x;
+      cost[startK] = 0;
+      // 単純な配列ベース優先度付きキュー（マップが小さいので十分速い）。
+      const pq = [[0, startK]];
+      let goal = -1;
+      while (pq.length) {
+        // 最小コストを取り出す。
+        let bi = 0;
+        for (let i = 1; i < pq.length; i += 1) if (pq[i][0] < pq[bi][0]) bi = i;
+        const [c, k] = pq.splice(bi, 1)[0];
+        if (c > cost[k]) continue;
+        const x = k % MAP_W, y = (k - x) / MAP_W;
+        if (tiles[y][x] === Tile.SEA) { goal = k; break; } // 海に到達したら確定
+        for (const [dx, dy] of N4) {
           const nx = x + dx, ny = y + dy;
           if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
-          if (visited.has(ny * MAP_W + nx)) continue;
-          if (height[ny][nx] < bh) { bh = height[ny][nx]; best = [nx, ny]; }
+          // 進入コスト: 標高が低いほど安い（谷を辿る）+ 1歩ごとの微小コストで最寄りの海へ。
+          const nk = ny * MAP_W + nx;
+          const nc = c + height[ny][nx] + 0.02;
+          if (nc < cost[nk]) { cost[nk] = nc; prev[nk] = k; pq.push([nc, nk]); }
         }
-        if (!best) break;
-        x = best[0]; y = best[1];
-        if (tiles[y][x] === Tile.SEA) break;
       }
-    }
+      // 経路を逆順に辿って川タイルとして刻む（海タイルと高山頂は除く）。
+      for (let k = goal; k !== -1; k = prev[k]) {
+        const x = k % MAP_W, y = (k - x) / MAP_W;
+        if (tiles[y][x] !== Tile.SEA && tiles[y][x] !== Tile.HIGH_MOUNTAIN) isRiver[y][x] = true;
+      }
+    };
+    for (const src of sources) carveRiverToSea(src);
     for (let y = 0; y < MAP_H; y += 1) {
       for (let x = 0; x < MAP_W; x += 1) {
         if (isRiver[y][x] && tiles[y][x] !== Tile.SEA) tiles[y][x] = Tile.RIVER;
@@ -2872,17 +2901,20 @@
     const cameraX = drawPos.x * TILE_SIZE - PLAY_W / 2 + TILE_SIZE / 2 - GAME_X;
     const cameraY = drawPos.y * TILE_SIZE - PLAY_H / 2 + TILE_SIZE / 2 - GAME_Y;
     const actionTarget = findActionTarget();
-    const startX = Math.max(0, Math.floor((cameraX + GAME_X) / TILE_SIZE) - 1);
-    const startY = Math.max(0, Math.floor((cameraY + GAME_Y) / TILE_SIZE) - 1);
-    const endX = Math.min(MAP_W, Math.ceil((cameraX + GAME_X + PLAY_W) / TILE_SIZE) + 1);
-    const endY = Math.min(MAP_H, Math.ceil((cameraY + GAME_Y + PLAY_H) / TILE_SIZE) + 1);
+    // 範囲はクランプしない。世界の外側も描画ループに含め、海として描く
+    // （実際の移動・探索は範囲外不可のまま。描画だけ海にして島を海に浮かべる）。
+    const startX = Math.floor((cameraX + GAME_X) / TILE_SIZE) - 1;
+    const startY = Math.floor((cameraY + GAME_Y) / TILE_SIZE) - 1;
+    const endX = Math.ceil((cameraX + GAME_X + PLAY_W) / TILE_SIZE) + 1;
+    const endY = Math.ceil((cameraY + GAME_Y + PLAY_H) / TILE_SIZE) + 1;
     ctx.save();
     ctx.beginPath();
     ctx.rect(GAME_X, GAME_Y, PLAY_W, PLAY_H);
     ctx.clip();
     for (let y = startY; y < endY; y += 1) {
       for (let x = startX; x < endX; x += 1) {
-        drawTile(x, y, cameraX, cameraY, actionTarget);
+        if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) drawSeaTile(x, y, cameraX, cameraY);
+        else drawTile(x, y, cameraX, cameraY, actionTarget);
       }
     }
     for (const base of state.bases) if (isSeenTile(base.x, base.y)) drawBase(base, cameraX, cameraY);
@@ -3264,6 +3296,15 @@
     }
   }
 
+  // 世界の範囲外を海として描画する（移動・探索は不可のまま、見た目だけ海）。
+  function drawSeaTile(x, y, cameraX, cameraY) {
+    const sx = Math.floor(x * TILE_SIZE - cameraX);
+    const sy = Math.floor(y * TILE_SIZE - cameraY);
+    ctx.fillStyle = tileInfo[Tile.SEA].color;
+    ctx.fillRect(sx, sy, TILE_SIZE, TILE_SIZE);
+    drawTilePattern(Tile.SEA, sx, sy, x, y);
+  }
+
   function drawActionHint(target, cameraX, cameraY) {
     if (Math.floor(performance.now() / 260) % 2 !== 0) return;
     const sx = Math.floor(target.x * TILE_SIZE - cameraX);
@@ -3376,7 +3417,10 @@
   }
 
   function isWaterTile(gx, gy) {
-    if (!state.map || gy < 0 || gy >= state.map.length || gx < 0 || gx >= state.map[0].length) return false;
+    // 世界の範囲外は海として描画するため、ここでも水扱い。
+    // → 世界の端の海タイルに余計な海岸線が出ず、海が外まで連続して見える。
+    if (!state.map) return false;
+    if (gy < 0 || gy >= state.map.length || gx < 0 || gx >= state.map[0].length) return true;
     const t = state.map[gy][gx];
     return t === Tile.RIVER || t === Tile.SEA;
   }

@@ -353,6 +353,7 @@
   let deathSequenceStart = 0;
   let deathSequenceReason = "";
   let gameOverReason = "";
+  let projectiles = []; // 投げ演出（描画専用・保存しない）。{fromX,fromY,toX,toY,start,dur}
 
   function makeState() {
     const map = generateIslandMap();
@@ -1843,16 +1844,19 @@
       const animal = state.animals.find((item) => item.x === tile.x && item.y === tile.y);
       if (animal) return { type: "animal", x: tile.x, y: tile.y, animal };
     }
-    // SPEAR解放後は上下左右2マス先の獲物も狙える（斜めは不可）。
+    // SPEAR解放後は8方向（上下左右＋斜め）2マス先の獲物も狙える。近い順に判定。
     const range = getAttackRange();
     if (range >= 2) {
       const p = state.player;
-      for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
-        const tx = p.gridX + dx * 2;
-        const ty = p.gridY + dy * 2;
-        if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
-        const animal = state.animals.find((item) => item.x === tx && item.y === ty);
-        if (animal) return { type: "animal", x: tx, y: ty, animal };
+      const dirs8 = [[0, -1], [1, 0], [0, 1], [-1, 0], [1, -1], [1, 1], [-1, 1], [-1, -1]];
+      for (let dist = 1; dist <= 2; dist += 1) {
+        for (const [dx, dy] of dirs8) {
+          const tx = p.gridX + dx * dist;
+          const ty = p.gridY + dy * dist;
+          if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) continue;
+          const animal = state.animals.find((item) => item.x === tx && item.y === ty);
+          if (animal) return { type: "animal", x: tx, y: ty, animal };
+        }
       }
     }
     for (const tile of tiles) {
@@ -1905,9 +1909,15 @@
     if (!Number.isFinite(animal.hp)) animal.hp = type.hp;
     const damage = Math.max(2, 2 + Math.floor((p.strength || 1) / 2));
     animal.hp -= damage;
-    p.hp = Math.max(0, p.hp - (animal.attack || type.attack || 4));
-    addLog("HIT");
-    addPopup(animal.x, animal.y, "HIT");
+    // 隣接(マンハッタン1)以外は槍の投げ攻撃。演出を出し、反撃は受けない。
+    const isThrow = manhattanDistance(p.gridX, p.gridY, animal.x, animal.y) >= 2;
+    if (isThrow) {
+      spawnProjectile(p.gridX, p.gridY, animal.x, animal.y);
+    } else {
+      p.hp = Math.max(0, p.hp - (animal.attack || type.attack || 4));
+    }
+    addLog(isThrow ? "THROW" : "HIT");
+    addPopup(animal.x, animal.y, isThrow ? "THROW" : "HIT");
     if (p.hp <= LOW_HP_THRESHOLD) addLog("DMG");
     if (animal.hp > 0) return true;
     const firstHunt = !state.discoveries.gather_meat;
@@ -2056,6 +2066,37 @@
 
   function addPopup(x, y, text) {
     addLog(text);
+  }
+
+  // 投げ演出: グリッド座標 from→to へ飛ぶ槍を一定時間描画する。
+  function spawnProjectile(fromX, fromY, toX, toY) {
+    projectiles.push({ fromX, fromY, toX, toY, start: performance.now(), dur: 220 });
+  }
+
+  function drawProjectiles(cameraX, cameraY) {
+    if (!projectiles.length) return;
+    const now = performance.now();
+    projectiles = projectiles.filter((pr) => now - pr.start < pr.dur);
+    for (const pr of projectiles) {
+      const t = Math.min(1, (now - pr.start) / pr.dur);
+      const cx = (pr.fromX + (pr.toX - pr.fromX) * t + 0.5) * TILE_SIZE - cameraX;
+      const cy = (pr.fromY + (pr.toY - pr.fromY) * t + 0.5) * TILE_SIZE - cameraY;
+      const ang = Math.atan2(pr.toY - pr.fromY, pr.toX - pr.fromX);
+      const len = 12;
+      const hx = Math.cos(ang) * len;
+      const hy = Math.sin(ang) * len;
+      ctx.strokeStyle = GLYPH;
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx - hx / 2, cy - hy / 2);   // 柄
+      ctx.lineTo(cx + hx / 2, cy + hy / 2);   // 穂先方向
+      ctx.stroke();
+      ctx.fillStyle = GLYPH;                  // 穂先
+      ctx.beginPath();
+      ctx.arc(cx + hx / 2, cy + hy / 2, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function gatherAmount() {
@@ -2763,6 +2804,7 @@
     if (state.monolith && isVisibleTile(state.monolith.x, state.monolith.y)) drawMonolith(state.monolith, cameraX, cameraY);
     if (actionTarget) drawActionHint(actionTarget, cameraX, cameraY);
     drawPlayer(p, cameraX, cameraY);
+    drawProjectiles(cameraX, cameraY);
     drawDirectionMarkers(cameraX, cameraY);
     ctx.restore();
     drawVision();
@@ -3128,9 +3170,11 @@
   // ===== モノクロ線画ヘルパー =====
   // 全アセット共通の黒線。輪郭主体・線幅一定・塗り最小限で象形文字的に描く。
   const GLYPH = "#161616";
+  let glyphColor = GLYPH;       // 現在のグリフ描画色（ハロー描画時に一時変更）
+  let glyphWidthBonus = 0;      // ハロー用に線幅/半径へ加算する量
   function glyphSetup(w) {
-    ctx.strokeStyle = GLYPH;
-    ctx.lineWidth = w;
+    ctx.strokeStyle = glyphColor;
+    ctx.lineWidth = w + glyphWidthBonus;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
   }
@@ -3149,18 +3193,18 @@
   }
   function gcircle(sx, sy, cx, cy, r, w = 2, fill = false) {
     ctx.beginPath();
-    ctx.arc(sx + cx, sy + cy, r, 0, Math.PI * 2);
+    ctx.arc(sx + cx, sy + cy, r + glyphWidthBonus / 2, 0, Math.PI * 2);
     if (fill) {
-      ctx.fillStyle = GLYPH;
+      ctx.fillStyle = glyphColor;
       ctx.fill();
     }
     glyphSetup(w);
     ctx.stroke();
   }
   function gdot(sx, sy, x, y, r = 1.4) {
-    ctx.fillStyle = GLYPH;
+    ctx.fillStyle = glyphColor;
     ctx.beginPath();
-    ctx.arc(sx + x, sy + y, r, 0, Math.PI * 2);
+    ctx.arc(sx + x, sy + y, r + glyphWidthBonus / 2, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -3297,6 +3341,17 @@
   }
 
   function drawResourceObject(resourceType, sx, sy, x, y) {
+    // まず白いハロー（太い白縁）を描き、暗い/賑やかな地形上でもアイコンが浮く。
+    glyphColor = "#f7f7f7";
+    glyphWidthBonus = 4;
+    drawResourceShape(resourceType, sx, sy, x, y);
+    // 次に通常の黒グリフを上書き。
+    glyphColor = GLYPH;
+    glyphWidthBonus = 0;
+    drawResourceShape(resourceType, sx, sy, x, y);
+  }
+
+  function drawResourceShape(resourceType, sx, sy, x, y) {
     if (resourceType === Resource.FRUIT) {
       // 果実: 丸い実 + 茎 + 小さな葉。食べ物だと分かれば十分。
       gcircle(sx, sy, 15, 19, 6, 2);

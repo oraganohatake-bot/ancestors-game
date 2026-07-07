@@ -166,8 +166,26 @@
     [Resource.FRUIT]: 100,
     [Resource.WOOD]: 150,
     [Resource.STONE]: 300,
-    [Resource.FLINT]: 300,
+    [Resource.FLINT]: 500,        // 火打石: 回復が非常に遅く、実質有限資源に近い
     [Resource.THICK_BRANCH]: 250, // 太い枝: 通常BRANCHより長め
+  };
+
+  // --- 集落人口による周辺資源の枯渇（消費圧） ---
+  // BASE / CAMP は毎ターン周辺タイルへ消費圧をかけ、近場の資源をだんだん痩せさせる。
+  // 消費圧は人口と割当労働者に比例し、拠点に近いタイルほど枯れやすい。
+  const SETTLEMENT_PRESSURE_RADIUS = 5;    // 拠点周辺で圧がかかる半径（チェビシェフ距離）
+  const SETTLEMENT_PRESSURE_COEF = 0.0022; // 消費確率の基本係数（圧 × 距離係数 × 資源重み × これ）
+  const SETTLEMENT_WORKER_WEIGHT = 2;      // 割当労働者1人あたりの追加圧（人口換算）
+  // 拠点の消費圧の重み。部族全体の人口・労働者圧を、この重みに応じて各拠点へ「分配」する。
+  // 拠点数が増えても総消費圧は増えず、枯渇エリアが広がる（＝CAMPは資源圏を開く）挙動になる。
+  const SETTLEMENT_WEIGHT = { BASE: 1.5, CAMP: 1.0 };
+  // 資源ごとの枯れやすさ。果物・枝は枯れやすく、石は遅く、火打石はさらに遅い（有限感）。
+  const RESOURCE_PRESSURE_WEIGHT = {
+    [Resource.FRUIT]: 1.2,
+    [Resource.WOOD]: 1.0,
+    [Resource.THICK_BRANCH]: 0.85,
+    [Resource.STONE]: 0.4,
+    [Resource.FLINT]: 0.25,
   };
   const ANIMAL_COUNT = 80;
   const ANIMAL_RESPAWN_TURNS = 120;
@@ -1134,6 +1152,7 @@
     updatePopulation();
     if (mode !== "playing") return;
     updateLaborYield();
+    applySettlementResourcePressure();
     revealAroundBases();
     updateInventions();
     updateEvolution();
@@ -1634,6 +1653,64 @@
     });
   }
 
+  // 集落（BASE / CAMP）の人口・労働者による周辺資源の消費圧を毎ターン適用する。
+  // 近場の果物・枝・石などが人口に比例して痩せていき、遠征や新CAMPの動機を作る。
+  function applySettlementResourcePressure() {
+    state.pressureDepletedThisTurn = 0;
+    if (!state || !state.resources || !Array.isArray(state.bases) || state.bases.length === 0) return;
+    // 部族全体の人口・労働者圧を、拠点の重みに応じて各拠点へ分配する。
+    // これにより拠点数が増えても総消費圧は増えず、枯渇エリアだけが広がる。
+    const totalPopulation = state.population || 1;
+    const totalWorkers = getAssignedWorkerCount();
+    const totalWeight = state.bases.reduce((sum, b) => sum + (SETTLEMENT_WEIGHT[b.type] || 1), 0) || 1;
+    const R = SETTLEMENT_PRESSURE_RADIUS;
+    for (const base of state.bases) {
+      const share = (SETTLEMENT_WEIGHT[base.type] || 1) / totalWeight;
+      const pressure = totalPopulation * share + totalWorkers * share * SETTLEMENT_WORKER_WEIGHT;
+      if (pressure <= 0) continue;
+      for (let dy = -R; dy <= R; dy += 1) {
+        for (let dx = -R; dx <= R; dx += 1) {
+          const d = Math.max(Math.abs(dx), Math.abs(dy));
+          if (d === 0 || d > R) continue;              // 拠点自体は枯渇させない
+          const x = base.x + dx, y = base.y + dy;
+          const resource = state.resources[`${x},${y}`];
+          if (!isDepletableResource(resource)) continue;
+          const weight = RESOURCE_PRESSURE_WEIGHT[resource.type] || 0;
+          if (weight <= 0) continue;
+          const distFactor = (R + 1 - d) / R;          // 中心付近ほど大（d=1で1.0, d=Rで最小）
+          const consumeChance = pressure * distFactor * weight * SETTLEMENT_PRESSURE_COEF;
+          if (Math.random() < consumeChance) depleteResourceByPressure(resource);
+        }
+      }
+    }
+  }
+
+  // 割当労働者の合計（fruit/stone/branch/hunt）。多いほど周辺への枯渇圧が強くなる。
+  function getAssignedWorkerCount() {
+    const l = state.labor;
+    if (!l) return 0;
+    return (l.fruit || 0) + (l.stone || 0) + (l.branch || 0) + (l.hunt || 0);
+  }
+
+  // 消費圧の対象になる資源か。海・山・拠点跡など資源が無いタイルは自然に除外される。
+  function isDepletableResource(resource) {
+    if (!resource || resource.removed) return false;
+    if (!(resource.type in RESOURCE_PRESSURE_WEIGHT)) return false;
+    return resource.remaining > 0;
+  }
+
+  // 圧を受けたタイルの資源を1段階減らす。0になったら枯渇状態にし、回復タイマーを開始する。
+  // 既存の採集処理と同じ remaining / regrowTimer / harvested を使い、二重管理を避ける。
+  function depleteResourceByPressure(resource) {
+    resource.remaining -= 1;
+    if (resource.remaining <= 0) {
+      resource.remaining = 0;
+      resource.harvested = true;
+      resource.regrowTimer = RESOURCE_REGROW_TIME[resource.type] || 100;
+      state.pressureDepletedThisTurn = (state.pressureDepletedThisTurn || 0) + 1;
+    }
+  }
+
   function updatePopups() {
     if (!state.popups) state.popups = [];
     for (const popup of state.popups) {
@@ -1808,8 +1885,16 @@
     if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return false;
     const tile = state.map[y][x];
     if (!isBuildableTile(tile)) return false;
-    if (state.bases.some((base) => manhattanDistance(base.x, base.y, x, y) <= 8)) return false;
+    // 狩り圧: 人口と狩人が多いほど拠点周辺の狩場が広く静かになり、獲物が出にくくなる。
+    const quietRadius = getSettlementQuietRadius();
+    if (state.bases.some((base) => manhattanDistance(base.x, base.y, x, y) <= quietRadius)) return false;
     return true;
+  }
+
+  // 獲物が湧かない拠点周辺の半径。基本8 + 人口/狩人による狩り圧で拡大（上限あり）。
+  function getSettlementQuietRadius() {
+    const huntPressure = Math.floor((state.population || 0) / 6) + Math.floor((state.labor && state.labor.hunt || 0) / 2);
+    return Math.min(16, 8 + huntPressure);
   }
 
   function updateInventions() {
@@ -3001,7 +3086,8 @@
     if (chosen) {
       const statY = y + panelH - 68;
       drawPixelTextFit(`SELECTED N${generationIndex + 1}`, x + 18, statY, panelW - 36, 2, "#fff");
-      drawPixelTextFit(`AGE ${chosen.age}  WIS ${chosen.inheritedWisdom}  INT ${chosen.intelligence}  ATK ${chosen.strength}`, x + 18, statY + 22, panelW - 36, 2, "#fff");
+      // 狭い端末+3桁でも縮まないよう、2行折り返しで安定させる。
+      drawPixelTextWrapped(`AGE ${chosen.age} WIS ${chosen.inheritedWisdom} INT ${chosen.intelligence} ATK ${chosen.strength}`, x + 18, statY + 22, panelW - 36, 2, 18, "#fff", "left", 2);
     }
   }
 
@@ -3289,6 +3375,7 @@
     if (resource && visible && isDepleted) {
       ctx.fillStyle = "rgba(255, 255, 255, 0.62)";
       ctx.fillRect(sx, sy, TILE_SIZE, TILE_SIZE);
+      if (isMaterialKnown(resource.type)) drawDepletedMark(resource.type, sx, sy);
     }
     if (!visible) {
       ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
@@ -3491,6 +3578,31 @@
     gline(sx, sy, [17, 4, 15, 19], 2);
     // 雪冠（小さな山形）
     gline(sx, sy, [14, 10, 17, 7, 20, 10], 2);
+  }
+
+  // 枯渇したタイルに残る「使い尽くした跡」の小さな記号。淡いグレーで控えめに描く。
+  // 果物→切り株、枝→落ちた小枝、石→掘った穴、火打石→削り跡。
+  function drawDepletedMark(resourceType, sx, sy) {
+    glyphColor = "#b7b7b7";
+    glyphWidthBonus = 0;
+    if (resourceType === Resource.FRUIT) {
+      // 実の落ちた切り株（低い輪郭 + 年輪の弧）
+      gline(sx, sy, [12, 22, 12, 18, 20, 18, 20, 22], 2);
+      gline(sx, sy, [14, 19, 18, 19], 1.5);
+    } else if (resourceType === Resource.WOOD || resourceType === Resource.THICK_BRANCH) {
+      // 地面に落ちた枯れ枝
+      gline(sx, sy, [10, 21, 22, 20], 2);
+      gline(sx, sy, [15, 20, 17, 17], 1.5);
+    } else if (resourceType === Resource.STONE) {
+      // 掘り返した穴
+      gcircle(sx, sy, 16, 20, 5, 2);
+      gline(sx, sy, [13, 20, 19, 20], 1.5);
+    } else if (resourceType === Resource.FLINT) {
+      // 採取後の削り跡
+      gline(sx, sy, [11, 22, 21, 16], 2);
+      gline(sx, sy, [14, 20, 16, 23], 1.5);
+    }
+    glyphColor = GLYPH;
   }
 
   function drawResourceObject(resourceType, sx, sy, x, y) {
@@ -4213,7 +4325,6 @@
       ctx.fillRect(GAME_X + PLAY_W, UI_TOP_H, 1, INTERNAL_H - UI_TOP_H);
     }
     const popCap = getPopCap();
-    drawPixelTextScaled(`P${state.population}/${popCap} WIS${state.wisdom} Y${getGameYear()}`, GAME_X + 10, 8, 2, "#fff");
     const tr = state.tribe;
     const storeParts = [`F${tr.fruit || 0}`];
     if (state.huntingUnlocked) storeParts.push(`M${tr.meat || 0}`);
@@ -4223,8 +4334,15 @@
     if (state.understoodStone) storeParts.push(`FL${tr.flint || 0}`);
     if (state.discoveries.craft_stone_axe) storeParts.push(`TB${tr.thickBranch || 0}`);
     const storeText = storeParts.join(" ");
-    const storeW = measurePixelText(storeText) * 2;
-    drawPixelTextScaled(storeText, GAME_X + PLAY_W - storeW - 10, 8, 2, "#fff");
+    // 左(基本ステータス)と右(資源)を構造的に分割して重なりを防ぐ。
+    // 右は必要分だけ確保(上限は使える幅の6割)、残りを左に割り当てて両方クランプ描画。
+    const hudPad = 10;
+    const hudGap = 12;
+    const hudAvail = PLAY_W - hudPad * 2;
+    const rightMaxW = Math.min(measurePixelText(storeText) * 2, Math.floor(hudAvail * 0.6));
+    const leftMaxW = hudAvail - rightMaxW - hudGap;
+    drawPixelTextFit(`P${state.population}/${popCap} WIS${state.wisdom} Y${getGameYear()}`, GAME_X + hudPad, 8, leftMaxW, 2, "#fff", "left");
+    drawPixelTextFit(storeText, GAME_X + PLAY_W - hudPad - rightMaxW, 8, rightMaxW, 2, "#fff", "right");
     if (state.debugImmortal) {
       const tag = "IMMORTAL";
       drawPixelTextScaled(tag, GAME_X + Math.floor((PLAY_W - measurePixelText(tag) * 2) / 2), 8, 2, "#f80");
@@ -4233,8 +4351,12 @@
     drawUiGauge("HP", Math.max(0, p.hp) / (p.maxHp || 100), GAME_X + 10, HUD_Y + 10, 96);
     const cap = getPlayerCapacity();
     drawUiGauge("BAG", inventoryTotal(p.inventory) / cap, GAME_X + 166, HUD_Y + 10, 66, `${inventoryTotal(p.inventory)}/${cap}`);
-    // ATK/INT は LIFE ラベル(右端の x-94 付近)に被らないよう幅を制限して縮める。
-    drawPixelTextFit(`ATK${state.tribeAtk} INT${state.tribeInt}`, GAME_X + PLAY_W - 224, HUD_Y + 12, 120, 2, "#fff");
+    // BAG ゲージ(右端 ~GAME_X+344)と LIFE ラベル(GAME_X+PLAY_W-94)の間に配置。
+    // ATK999 INT999 がスケール2で収まる幅を確保し、収まらない時のみ末尾省略(縮小はしない)。
+    const atkX = GAME_X + 352;
+    const lifeLeft = GAME_X + PLAY_W - 94;
+    const atkMaxW = lifeLeft - 12 - atkX;
+    drawPixelTextFit(`ATK${state.tribeAtk} INT${state.tribeInt}`, atkX, HUD_Y + 12, atkMaxW, 2, "#fff", "left", 2);
     drawLifeCircle(GAME_X + PLAY_W - 18, HUD_Y + 18);
     drawControlPanel();
   }
@@ -4380,7 +4502,7 @@
       const lineY = y + 50 + i * 26;
       if (i === gameMenuIndex) drawOutlinedPixelTextScaled("!", x + 18, lineY, 2);
       // 左カラムは仕切り線(x+166)まで。はみ出すなら縮小/省略する。
-      drawPixelTextFit(options[i], x + 42, lineY, 166 - 42 - 8, 2, "#fff");
+      drawPixelTextFit(options[i], x + 42, lineY, 166 - 42 - 8, 2, "#fff", "left", 2);
     }
     ctx.fillStyle = "#fff";
     ctx.fillRect(x + 166, y + 44, 3, h - 60);
@@ -4457,7 +4579,7 @@
       // 左半分（ストレージ列の手前）に収める。< > と重ならないよう余白を確保。
       const arrowX = x + Math.floor(w / 2) - 34;
       const optMaxW = arrowX - 8 - (x + 54);
-      drawPixelTextFit(options[i], x + 54, lineY, optMaxW, 2, "#fff");
+      drawPixelTextFit(options[i], x + 54, lineY, optMaxW, 2, "#fff", "left", 2);
       if (selected && (i === 0 || i === 1)) {
         drawPixelTextScaled("< >", arrowX, lineY, 2, "#fff");
       }
@@ -4505,7 +4627,7 @@
     for (let i = 0; i < options.length; i += 1) {
       const lineY = y + 58 + i * 30;
       if (i === baseMenuIndex) drawOutlinedPixelTextScaled("!", x + 24, lineY, 2);
-      drawPixelTextFit(options[i], x + 54, lineY, w - 54 - 12, 2, "#fff");
+      drawPixelTextFit(options[i], x + 54, lineY, w - 54 - 12, 2, "#fff", "left", 2);
     }
   }
 
@@ -4695,13 +4817,13 @@
       const lineY = y + 56 + i * 30;
       if (i === systemMenuIndex) drawOutlinedPixelTextScaled("!", x + 18, lineY, 2);
       const isDebug = options[i].startsWith("DEBUG");
-      drawPixelTextFit(options[i], x + 42, lineY, x + w - 12 - (x + 42), 2, isDebug ? "#f80" : "#fff");
+      drawPixelTextFit(options[i], x + 42, lineY, x + w - 12 - (x + 42), 2, isDebug ? "#f80" : "#fff", "left", 2);
     }
   }
 
   function getSystemMenuOptions() {
     const immortal = state && state.debugImmortal ? "ON" : "OFF";
-    return ["SAVE AUTO", "LOAD TITLE", "RESET SAVE", "DEBUG: UNLOCK ALL", "DEBUG: ADD RES", "DEBUG: POP +5", `DEBUG: IMMORTAL ${immortal}`];
+    return ["SAVE AUTO", "LOAD TITLE", "RESET SAVE", "DEBUG: UNLOCK ALL", "DEBUG: ADD RES", "DEBUG: POP +5", `DEBUG: IMMORTAL ${immortal}`, "DEBUG: RES PRESSURE"];
   }
 
   function moveSystemMenuSelection(delta) {
@@ -4731,7 +4853,43 @@
       debugPopPlus5();
     } else if (selected.startsWith("DEBUG: IMMORTAL")) {
       debugToggleImmortal();
+    } else if (selected === "DEBUG: RES PRESSURE") {
+      debugResourcePressureReport();
     }
+  }
+
+  // 消費圧のデバッグ確認: 圧の強さ・枯渇タイル数・回復待ち数・拠点近傍の枯渇数をログ出力。
+  function debugResourcePressureReport() {
+    const workers = getAssignedWorkerCount();
+    // 分配後の総消費圧（全拠点合計＝拠点数に依らずほぼ一定）。
+    const totalPressure = (state.population || 1) + workers * SETTLEMENT_WORKER_WEIGHT;
+    const camps = (state.bases || []).filter((b) => b.type === "CAMP").length;
+    let depleted = 0, regrowing = 0;
+    if (state.resources) {
+      for (const r of Object.values(state.resources)) {
+        if (!r || r.removed) continue;
+        if (r.remaining <= 0) {
+          depleted += 1;
+          if (r.regrowTimer > 0) regrowing += 1;
+        }
+      }
+    }
+    // 全拠点の半径R内で枯渇している資源タイル数（近場の痩せ具合の目安）。
+    let nearDepleted = 0;
+    const R = SETTLEMENT_PRESSURE_RADIUS;
+    for (const base of state.bases || []) {
+      for (let dy = -R; dy <= R; dy += 1) {
+        for (let dx = -R; dx <= R; dx += 1) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) > R) continue;
+          const r = state.resources && state.resources[`${base.x + dx},${base.y + dy}`];
+          if (r && !r.removed && r.remaining <= 0 && r.type in RESOURCE_PRESSURE_WEIGHT) nearDepleted += 1;
+        }
+      }
+    }
+    addLog(`PRESS ${totalPressure.toFixed(0)} (POP${state.population}+W${workers}) CAMP${camps}`);
+    addLog(`DEPLETED ${depleted} REGROW ${regrowing}`);
+    addLog(`NEAR-BASE DEPLETED ${nearDepleted}`);
+    state.systemMenuOpen = false;
   }
 
   function debugToggleImmortal() {
@@ -5049,8 +5207,8 @@
     let str = String(text).toUpperCase();
     while (s > minScale && measurePixelText(str) * s > maxWidth) s -= 1;
     if (measurePixelText(str) * s > maxWidth) {
-      while (str.length > 1 && measurePixelText(`${str}.`) * s > maxWidth) str = str.slice(0, -1);
-      str += ".";
+      while (str.length > 1 && measurePixelText(`${str}..`) * s > maxWidth) str = str.slice(0, -1);
+      str += "..";
     }
     let dx = x;
     const w = measurePixelText(str) * s;

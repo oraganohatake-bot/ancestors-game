@@ -39,16 +39,21 @@ const RESOURCE_COLORS := {
 	ResourceSystem.FLINT: Color("8d7ce0"),
 }
 const COLOR_TARGET_RING := Color("f5e27a")  # 採集できる資源の強調
+const COLOR_BASE := Color("d9c9a3")         # 拠点の枠 (地形より明るく)
+const COLOR_BASE_FILL := Color("5a4a33")    # 拠点の土台
 
 var tiles: Array = []
 var player: PlayerController = null
 var resources: ResourceSystem = null
+var settlements: SettlementSystem = null
 var gather_target = null                    # Vector2i or null
 
-func setup(p_tiles: Array, p_player: PlayerController, p_resources: ResourceSystem) -> void:
+func setup(p_tiles: Array, p_player: PlayerController, p_resources: ResourceSystem,
+		p_settlements: SettlementSystem) -> void:
 	tiles = p_tiles
 	player = p_player
 	resources = p_resources
+	settlements = p_settlements
 	queue_redraw()
 
 func _draw() -> void:
@@ -70,6 +75,7 @@ func _draw() -> void:
 			_draw_resource(x, y)
 			draw_rect(r, COLOR_GRID, false, 1.0)
 
+	_draw_settlements()
 	_draw_gather_target()
 	_draw_player()
 
@@ -143,6 +149,29 @@ func _draw_resource(x: int, y: int) -> void:
 			draw_colored_polygon(PackedVector2Array([        # 火打石: 鋭い三角
 				Vector2(cx, cy - 3.5), Vector2(cx + 3, cy + 2.5),
 				Vector2(cx - 3, cy + 2.5)]), col)
+
+## 拠点 (BASE)。小屋を思わせる「四角 + 屋根」の記号で描く。
+## プレイヤーと重なっても分かるよう、タイル全体の枠として描き、
+## プレイヤーより先に (下に) 置く。
+func _draw_settlements() -> void:
+	if settlements == null:
+		return
+	for s in settlements.settlements:
+		var p: Vector2i = s["position"]
+		if not player.is_explored(p.x, p.y):
+			continue
+		var ox := p.x * TILE_PX
+		var oy := p.y * TILE_PX
+		# 土台: タイルを塗り替えて「ここは拠点」と分かるようにする
+		draw_rect(Rect2(ox + 2, oy + 2, TILE_PX - 4, TILE_PX - 4), COLOR_BASE_FILL, true)
+		# 外枠の二重線 (プレイヤーが上に立っても外周は見える)
+		draw_rect(Rect2(ox + 1, oy + 1, TILE_PX - 2, TILE_PX - 2), COLOR_BASE, false, 1.0)
+		draw_rect(Rect2(ox + 3, oy + 3, TILE_PX - 6, TILE_PX - 6), COLOR_BASE, false, 1.0)
+		# 屋根: 上辺の三角
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(ox + TILE_PX * 0.5, oy + 2),
+			Vector2(ox + TILE_PX - 4, oy + 7),
+			Vector2(ox + 4, oy + 7)]), COLOR_BASE)
 
 ## 今まさに採れる資源を囲む。「採集ボタンが何に効くか」を迷わせない。
 func _draw_gather_target() -> void:

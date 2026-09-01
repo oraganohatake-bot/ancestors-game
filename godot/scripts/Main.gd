@@ -26,6 +26,7 @@ var map_gen := MapGenerator.new()
 var turn_system := TurnSystem.new()
 var player := PlayerController.new()
 var resources := ResourceSystem.new()
+var settlements := SettlementSystem.new()
 
 var tiles: Array = []
 var log_lines: Array[String] = []
@@ -35,8 +36,10 @@ var log_lines: Array[String] = []
 @onready var status_label: Label = %StatusLabel
 @onready var terrain_label: Label = %TerrainLabel
 @onready var inventory_label: Label = %InventoryLabel
+@onready var storage_label: Label = %StorageLabel
 @onready var log_label: Label = %LogLabel
 @onready var btn_gather: Button = %BtnGather
+@onready var btn_deposit: Button = %BtnDeposit
 
 func _ready() -> void:
 	# 方向ボタン: 押しっぱなしでの連打は Phase 1 では不要 (1タップ1マス)
@@ -46,6 +49,7 @@ func _ready() -> void:
 	%BtnRight.pressed.connect(_on_move_pressed.bind("right"))
 	%BtnWait.pressed.connect(_on_wait_pressed)
 	%BtnGather.pressed.connect(_on_gather_pressed)
+	%BtnDeposit.pressed.connect(_on_deposit_pressed)
 	%BtnNewGame.pressed.connect(new_game)
 	# SubViewportContainer.stretch = true なので SubViewport は
 	# コンテナサイズに自動追従する (端末ごとの縦横比はここで吸収される)。
@@ -58,11 +62,16 @@ func new_game() -> void:
 	resources.generate(tiles, seed_value)
 	resources.reset_inventory()
 	turn_system.reset()
-	player.place_at(map_gen.find_spawn(tiles))
+	# 開始地点をそのまま BASE にする。ここが往復の起点になる。
+	var spawn := map_gen.find_spawn(tiles)
+	settlements.reset()
+	settlements.create_base(spawn)
+	player.reset_fog()
+	player.place_at(spawn)
 	player.reveal(tiles)
 	log_lines.clear()
-	_add_log("島に降り立った。")
-	map_view.setup(tiles, player, resources)
+	_add_log("ここに拠点を築いた。")
+	map_view.setup(tiles, player, resources, settlements)
 	_refresh()
 
 # ── 入力 ─────────────────────────────────────────────────────────
@@ -76,6 +85,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 	if event.is_action_pressed("gather"):
 		_on_gather_pressed()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("deposit"):
+		_on_deposit_pressed()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("wait_turn"):
 		_on_wait_pressed()
@@ -100,6 +112,11 @@ func _on_move_pressed(dir_name: String) -> void:
 ## 採集。足元→隣接の順に探し、見つかればターンを消費する。
 ## 何も無ければターンは進めない (空振りでターンを損しない)。
 func _on_gather_pressed() -> void:
+	# 上限チェックを先に行う。持てないのにターンだけ減るのを防ぐ。
+	if resources.is_full():
+		_add_log("持ちきれない。拠点へ戻ろう。")
+		_refresh()
+		return
 	var target = resources.find_gather_target(player.grid_x, player.grid_y)
 	if target == null:
 		_add_log("近くに採集できるものがない。")
@@ -115,6 +132,25 @@ func _on_gather_pressed() -> void:
 	_add_log("%s を %d 採集した。" % [label, got["amount"]])
 	if got["depleted"]:
 		_add_log("ここは採り尽くした。")
+	if resources.is_full():
+		_add_log("もう持てない。")
+	_refresh()
+
+## 納品。BASE の上にいて、かつ所持品がある場合のみ成功しターンを消費する。
+func _on_deposit_pressed() -> void:
+	var settlement := settlements.settlement_at(player.grid_x, player.grid_y)
+	if settlement.is_empty():
+		_add_log("ここは拠点ではない。")
+		_refresh()
+		return
+	if resources.carried_total() <= 0:
+		_add_log("納めるものがない。")
+		_refresh()
+		return
+	var taken := resources.take_all()
+	var total := settlements.deposit(settlement, taken)
+	turn_system.advance_turn()
+	_add_log("拠点に %d 納めた。" % total)
 	_refresh()
 
 func _on_wait_pressed() -> void:
@@ -130,6 +166,7 @@ func _refresh() -> void:
 	map_view.gather_target = target
 	map_view.queue_redraw()
 	_update_gather_button(target)
+	_update_deposit_button()
 	# プレイヤー中心カメラ (マップは画面に収まらないのでスクロールさせる)
 	map_camera.position = Vector2(
 		player.grid_x * MapView.TILE_PX + MapView.TILE_PX * 0.5,
@@ -137,11 +174,16 @@ func _refresh() -> void:
 	status_label.text = turn_system.status_text()
 	terrain_label.text = "足元: %s" % _terrain_name(tiles[player.grid_y][player.grid_x])
 	inventory_label.text = resources.inventory_text()
+	storage_label.text = settlements.storage_text(settlements.get_base())
 	log_label.text = "\n".join(log_lines)
 
 ## 採れるものが無いときはボタンを無効化する。
 ## 「押せるのに何も起きない」を無くしてスマホでの空タップを減らす。
 func _update_gather_button(target) -> void:
+	if resources.is_full():
+		btn_gather.disabled = true
+		btn_gather.text = "満杯"
+		return
 	if target == null:
 		btn_gather.disabled = true
 		btn_gather.text = "採る"
@@ -150,6 +192,14 @@ func _update_gather_button(target) -> void:
 	var node := resources.node_at(target.x, target.y)
 	var type: String = node.get("type", "")
 	btn_gather.text = "採る:%s" % ResourceSystem.SHORT_LABELS.get(type, "?")
+
+## 納品ボタン: BASE 上かつ所持品ありのときだけ押せる。
+func _update_deposit_button() -> void:
+	var on_base := settlements.has_settlement_at(player.grid_x, player.grid_y)
+	var carrying := resources.carried_total()
+	var can_deposit := on_base and carrying > 0
+	btn_deposit.disabled = not can_deposit
+	btn_deposit.text = "納品:%d" % carrying if can_deposit else "納品"
 
 func _add_log(line: String) -> void:
 	log_lines.append(line)

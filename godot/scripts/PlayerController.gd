@@ -17,9 +17,14 @@ var grid_y: int = 0
 ## 探索済みタイル。キー "x,y" → true。将来のセーブに載せやすい素の辞書で持つ。
 var explored: Dictionary = {}
 
+## プレイヤーを指定タイルへ置く。探索済みの記憶は消さない。
+## (新規ゲームで霧をリセットしたい場合は reset_fog() を別途呼ぶ)
 func place_at(pos: Vector2i) -> void:
 	grid_x = pos.x
 	grid_y = pos.y
+
+## 探索済みの記憶を消す。新規ゲーム開始時のみ使う。
+func reset_fog() -> void:
 	explored.clear()
 
 ## 指定方向へ移動できるか。マップ外と海はブロックする。

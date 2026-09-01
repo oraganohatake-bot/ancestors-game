@@ -53,6 +53,10 @@ const MAX_REMAINING := {
 
 const GATHER_AMOUNT := 1                 # 1回の採集で得られる量 (Canvas版 gatherAmount)
 
+## プレイヤーの所持上限。資源種別ごとではなく「総個数」で判定する。
+## これがあることで BASE へ戻る動機が生まれる (Phase 2B の要)。
+const CARRY_CAPACITY := 8
+
 ## 資源ノード。キー "x,y" → { type, remaining, max_remaining, regrow_timer }
 var nodes: Dictionary = {}
 
@@ -136,8 +140,29 @@ func find_gather_target(px: int, py: int):
 			return Vector2i(x, y)
 	return null
 
+## 所持している総個数。
+func carried_total() -> int:
+	var total := 0
+	for r in ORDER:
+		total += inventory.get(r, 0)
+	return total
+
+func is_full() -> bool:
+	return carried_total() >= CARRY_CAPACITY
+
+## 所持品を全て取り出して空にする。納品で使う。
+func take_all() -> Dictionary:
+	var taken := {}
+	for r in ORDER:
+		taken[r] = inventory.get(r, 0)
+	reset_inventory()
+	return taken
+
 ## 採集する。成功したら { type, amount, depleted } を返す。失敗なら空辞書。
+## 所持上限に達している場合は採集しない (呼び出し側でターンを消費させない)。
 func gather(x: int, y: int) -> Dictionary:
+	if is_full():
+		return {}
 	var key := "%d,%d" % [x, y]
 	if not nodes.has(key):
 		return {}
@@ -145,7 +170,10 @@ func gather(x: int, y: int) -> Dictionary:
 	if node["remaining"] <= 0:
 		return {}
 	var type: String = node["type"]
-	var amount: int = mini(GATHER_AMOUNT, node["remaining"])
+	var space := CARRY_CAPACITY - carried_total()
+	var amount: int = mini(mini(GATHER_AMOUNT, node["remaining"]), space)
+	if amount <= 0:
+		return {}
 	node["remaining"] -= amount
 	inventory[type] = inventory.get(type, 0) + amount
 	var depleted: bool = node["remaining"] <= 0
@@ -159,4 +187,4 @@ func inventory_text() -> String:
 	var parts: Array[String] = []
 	for r in ORDER:
 		parts.append("%s %d" % [SHORT_LABELS[r], inventory.get(r, 0)])
-	return " / ".join(parts)
+	return "%s   %d/%d" % [" ".join(parts), carried_total(), CARRY_CAPACITY]

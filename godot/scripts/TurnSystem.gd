@@ -19,6 +19,11 @@ var turn: int = 0
 var year: int = 1
 var generation: int = 1
 
+## 毎ターン処理の対象。Main.gd から注入する。
+## TurnSystem がシステムを直接 new せず参照だけ持つことで、
+## Phase 2E 以降で人口/労働者を足すときも同じやり方で並べられる。
+var resources: ResourceSystem = null
+
 func reset() -> void:
 	turn = 0
 	year = 1
@@ -43,9 +48,10 @@ func _on_turn_advanced() -> void:
 
 # ── Phase 2 以降で実装するフック群 (今は意図的に空) ──────────────
 func _regrow_resources() -> void:
-	# Phase 2A では採り尽くしたノードは枯れたまま。
-	# ここで node["regrow_timer"] を進めて remaining を戻す予定 (Phase 2B)。
-	pass          # 資源回復 (森の果物 / 山の石 の regrow)
+	# 枯れたノードのタイマーを進め、0 になったものを満量で復活させる。
+	# 復活した座標は Phase 2C では使っていない (見た目の枯渇跡が消えるのが合図)。
+	if resources != null:
+		resources.tick_regrow()
 
 func _grow_population() -> void:
 	pass          # 人口増加 (食料と拠点キャパから)

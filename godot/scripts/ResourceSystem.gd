@@ -57,13 +57,26 @@ const GATHER_AMOUNT := 1                 # 1回の採集で得られる量 (Canv
 ## これがあることで BASE へ戻る動機が生まれる (Phase 2B の要)。
 const CARRY_CAPACITY := 8
 
+## 枯れたノードが復活するまでのターン数 [最小, 最大] (Phase 2C)。
+## ノードごとに範囲内でばらつかせるので、近場が一斉に復活せず戻る時期がずれる。
+## 果物は早く戻り、火打石は実質有限資源に近い — Canvas版の設計思想を引き継ぐ。
+const REGROW_TIME := {
+	FRUIT: [80, 100],
+	WOOD:  [140, 160],
+	STONE: [280, 320],
+	FLINT: [450, 500],
+}
+
 ## 資源ノード。キー "x,y" → { type, remaining, max_remaining, regrow_timer }
 var nodes: Dictionary = {}
 
 ## プレイヤーの所持品。Phase 2A では上限なし。
 var inventory: Dictionary = {}
 
+var _rng := RandomNumberGenerator.new()
+
 func _init() -> void:
+	_rng.randomize()
 	reset_inventory()
 
 func reset_inventory() -> void:
@@ -178,9 +191,38 @@ func gather(x: int, y: int) -> Dictionary:
 	inventory[type] = inventory.get(type, 0) + amount
 	var depleted: bool = node["remaining"] <= 0
 	if depleted:
-		# Phase 2B で regrow を入れるときにここのタイマーを使う
-		node["regrow_timer"] = 0
+		node["regrow_timer"] = _roll_regrow_time(type)
 	return {"type": type, "amount": amount, "depleted": depleted}
+
+## 復活までのターン数を範囲内で決める。
+func _roll_regrow_time(type: String) -> int:
+	var range_pair: Array = REGROW_TIME.get(type, [100, 120])
+	return _rng.randi_range(int(range_pair[0]), int(range_pair[1]))
+
+## 毎ターン呼ばれ、枯れたノードのタイマーを進める (Phase 2C)。
+## 0 になったノードは満量で復活する。復活した座標のリストを返す。
+##
+## ここでは「ノード自身の自然回復」だけを扱う。人口・集落による消費圧は
+## Phase 2F で別の仕組みとして足す (回復と消費を混ぜないでおく)。
+func tick_regrow() -> Array[Vector2i]:
+	var regrown: Array[Vector2i] = []
+	for key in nodes:
+		var node: Dictionary = nodes[key]
+		if node["remaining"] > 0:
+			continue
+		if node["regrow_timer"] <= 0:
+			continue
+		node["regrow_timer"] -= 1
+		if node["regrow_timer"] <= 0:
+			node["remaining"] = node["max_remaining"]
+			var p: PackedStringArray = key.split(",")
+			regrown.append(Vector2i(int(p[0]), int(p[1])))
+	return regrown
+
+## 枯れていて、まだ復活していないノードか (枯渇跡の描画に使う)。
+func is_depleted(x: int, y: int) -> bool:
+	var n := node_at(x, y)
+	return not n.is_empty() and n["remaining"] <= 0
 
 ## HUD 用の1行表示。
 func inventory_text() -> String:

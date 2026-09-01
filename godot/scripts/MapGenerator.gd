@@ -78,7 +78,7 @@ func _build_height_field() -> Array:
 				var d := Vector2(x - p["x"], y - p["y"]).length()
 				var falloff: float = maxf(0.0, 1.0 - d / p["r"])
 				h += p["amp"] * falloff * falloff      # 二乗で山裾をなだらかに
-			# островを楕円状に閉じる: 中心から遠いほど下げる (端は必ず海になる)
+			# 島を楕円状に閉じる: 中心から遠いほど下げる (端は必ず海になる)
 			var edge_t := Vector2((x - cx) / (MAP_W * 0.5), (y - cy) / (MAP_H * 0.5)).length()
 			h -= pow(maxf(0.0, edge_t), 3.0) * 0.55
 			h += noise.get_noise_2d(float(x), float(y)) * 0.13

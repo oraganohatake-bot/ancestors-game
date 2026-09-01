@@ -42,6 +42,8 @@ var log_lines: Array[String] = []
 @onready var btn_deposit: Button = %BtnDeposit
 
 func _ready() -> void:
+	# 毎ターンの資源回復を TurnSystem に任せる (Main は流れだけを持つ)
+	turn_system.resources = resources
 	# 方向ボタン: 押しっぱなしでの連打は Phase 1 では不要 (1タップ1マス)
 	%BtnUp.pressed.connect(_on_move_pressed.bind("up"))
 	%BtnDown.pressed.connect(_on_move_pressed.bind("down"))

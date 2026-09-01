@@ -39,6 +39,7 @@ const RESOURCE_COLORS := {
 	ResourceSystem.FLINT: Color("8d7ce0"),
 }
 const COLOR_TARGET_RING := Color("f5e27a")  # 採集できる資源の強調
+const COLOR_DEPLETED := Color("b7b7b7")     # 枯渇跡 (淡いグレーで控えめに)
 const COLOR_BASE := Color("d9c9a3")         # 拠点の枠 (地形より明るく)
 const COLOR_BASE_FILL := Color("5a4a33")    # 拠点の土台
 
@@ -122,12 +123,17 @@ func _draw_tile_symbol(t: int, x: int, y: int, base: Color) -> void:
 			draw_rect(Rect2(ox + 3, oy + 6, 8, 1), lw, true)
 			draw_rect(Rect2(ox + 9, oy + 12, 8, 1), lw, true)
 
-## 資源マーカー。枯れたノードは描かない (採り尽くした場所が一目で分かる)。
+## 資源マーカー。枯れたノードは「使い尽くした跡」に描き替える。
+## 跡が残ることで「ここは採り尽くした / まだ戻っていない」が目で分かり、
+## 復活したら通常マーカーに戻る (Phase 2C)。
 func _draw_resource(x: int, y: int) -> void:
 	if resources == null:
 		return
 	var node := resources.node_at(x, y)
-	if node.is_empty() or node["remaining"] <= 0:
+	if node.is_empty():
+		return
+	if node["remaining"] <= 0:
+		_draw_depleted_mark(node["type"], x, y)
 		return
 	var type: String = node["type"]
 	var col: Color = RESOURCE_COLORS.get(type, Color.WHITE)
@@ -149,6 +155,31 @@ func _draw_resource(x: int, y: int) -> void:
 			draw_colored_polygon(PackedVector2Array([        # 火打石: 鋭い三角
 				Vector2(cx, cy - 3.5), Vector2(cx + 3, cy + 2.5),
 				Vector2(cx - 3, cy + 2.5)]), col)
+
+## 枯渇跡。淡いグレーの小さな記号で、資源マーカーより明確に弱く描く。
+## 果物→切り株 / 木→落ちた枯れ枝 / 石→掘った穴 / 火打石→削り跡。
+## (Canvas版 drawDepletedMark と同じ考え方)
+func _draw_depleted_mark(type: String, x: int, y: int) -> void:
+	var cx := x * TILE_PX + TILE_PX * 0.5
+	var cy := y * TILE_PX + TILE_PX * 0.5
+	var c := COLOR_DEPLETED
+	c.a = 0.55                                   # 主張しすぎない
+	match type:
+		ResourceSystem.FRUIT:
+			# 実の落ちた切り株: 低い台形 + 年輪の横線
+			draw_rect(Rect2(cx - 3, cy, 6, 3), c, false, 1.0)
+			draw_line(Vector2(cx - 1.5, cy + 1.5), Vector2(cx + 1.5, cy + 1.5), c, 1.0)
+		ResourceSystem.WOOD:
+			# 地面に落ちた枯れ枝: 横線 + 小枝
+			draw_line(Vector2(cx - 3.5, cy + 1.5), Vector2(cx + 3.5, cy + 0.5), c, 1.0)
+			draw_line(Vector2(cx, cy + 1), Vector2(cx + 1.5, cy - 1.5), c, 1.0)
+		ResourceSystem.STONE:
+			# 掘り返した穴: 潰れた楕円の輪郭
+			draw_arc(Vector2(cx, cy + 1), 3.0, 0, TAU, 12, c, 1.0)
+		ResourceSystem.FLINT:
+			# 採取後の削り跡: 交差する2本の線
+			draw_line(Vector2(cx - 3, cy + 2), Vector2(cx + 3, cy - 2), c, 1.0)
+			draw_line(Vector2(cx - 1, cy - 1), Vector2(cx + 1, cy + 2.5), c, 1.0)
 
 ## 拠点 (BASE)。小屋を思わせる「四角 + 屋根」の記号で描く。
 ## プレイヤーと重なっても分かるよう、タイル全体の枠として描き、

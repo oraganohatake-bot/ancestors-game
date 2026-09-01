@@ -29,11 +29,12 @@ const LABELS := {
 	FLINT: "火打石",
 }
 
+## HUD 用の1文字記号。端末表示に寄せてアルファベットにする。
 const SHORT_LABELS := {
-	FRUIT: "果",
-	WOOD: "木",
-	STONE: "石",
-	FLINT: "火",
+	FRUIT: "F",
+	WOOD: "W",
+	STONE: "S",
+	FLINT: "L",
 }
 
 # 地形ごとの出現率 (Canvas版の RESOURCE_* 定数と同じ値)
@@ -228,5 +229,5 @@ func is_depleted(x: int, y: int) -> bool:
 func inventory_text() -> String:
 	var parts: Array[String] = []
 	for r in ORDER:
-		parts.append("%s %d" % [SHORT_LABELS[r], inventory.get(r, 0)])
-	return "%s   %d/%d" % [" ".join(parts), carried_total(), CARRY_CAPACITY]
+		parts.append("%s %02d" % [SHORT_LABELS[r], inventory.get(r, 0)])
+	return "  ".join(parts)

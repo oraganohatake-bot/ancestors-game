@@ -1,0 +1,71 @@
+[gd_resource type="Theme" load_steps=6 format=3]
+
+; 端末表示のような無機質なUI。
+; 黒背景 + 1px の白枠のみ。角丸なし、hover 演出はほぼ無し、押下で白黒反転。
+; 装飾を足さないことでプロトタイプ版の荒さを保つ。
+
+[sub_resource type="StyleBoxFlat" id="btn_normal"]
+bg_color = Color(0.02, 0.02, 0.02, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.878, 0.878, 0.878, 1)
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+
+[sub_resource type="StyleBoxFlat" id="btn_hover"]
+bg_color = Color(0.07, 0.07, 0.07, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(1, 1, 1, 1)
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+
+[sub_resource type="StyleBoxFlat" id="btn_pressed"]
+bg_color = Color(0.878, 0.878, 0.878, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(1, 1, 1, 1)
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+
+[sub_resource type="StyleBoxFlat" id="btn_disabled"]
+bg_color = Color(0.02, 0.02, 0.02, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.27, 0.27, 0.27, 1)
+content_margin_left = 2.0
+content_margin_top = 2.0
+content_margin_right = 2.0
+content_margin_bottom = 2.0
+
+[sub_resource type="StyleBoxEmpty" id="panel_empty"]
+
+[resource]
+Button/colors/font_color = Color(0.878, 0.878, 0.878, 1)
+Button/colors/font_hover_color = Color(1, 1, 1, 1)
+Button/colors/font_pressed_color = Color(0.02, 0.02, 0.02, 1)
+Button/colors/font_disabled_color = Color(0.27, 0.27, 0.27, 1)
+Button/colors/font_focus_color = Color(0.878, 0.878, 0.878, 1)
+Button/font_sizes/font_size = 12
+Button/styles/normal = SubResource("btn_normal")
+Button/styles/hover = SubResource("btn_hover")
+Button/styles/pressed = SubResource("btn_pressed")
+Button/styles/disabled = SubResource("btn_disabled")
+Button/styles/focus = SubResource("btn_normal")
+Label/colors/font_color = Color(0.878, 0.878, 0.878, 1)
+Label/font_sizes/font_size = 12
+PanelContainer/styles/panel = SubResource("panel_empty")

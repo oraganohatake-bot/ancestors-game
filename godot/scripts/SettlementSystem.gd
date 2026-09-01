@@ -74,5 +74,5 @@ func storage_text(settlement: Dictionary) -> String:
 	var storage: Dictionary = settlement["storage"]
 	var parts: Array[String] = []
 	for r in ResourceSystem.ORDER:
-		parts.append("%s %d" % [ResourceSystem.SHORT_LABELS[r], storage.get(r, 0)])
-	return "BASE  " + " ".join(parts)
+		parts.append("%s %02d" % [ResourceSystem.SHORT_LABELS[r], storage.get(r, 0)])
+	return "BASE " + " ".join(parts)

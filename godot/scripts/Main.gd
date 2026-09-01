@@ -34,7 +34,6 @@ var log_lines: Array[String] = []
 @onready var map_view: MapView = %MapView
 @onready var map_camera: Camera2D = %MapCamera
 @onready var status_label: Label = %StatusLabel
-@onready var terrain_label: Label = %TerrainLabel
 @onready var inventory_label: Label = %InventoryLabel
 @onready var storage_label: Label = %StorageLabel
 @onready var log_label: Label = %LogLabel
@@ -72,7 +71,7 @@ func new_game() -> void:
 	player.place_at(spawn)
 	player.reveal(tiles)
 	log_lines.clear()
-	_add_log("ここに拠点を築いた。")
+	_add_log("> 拠点設置")
 	map_view.setup(tiles, player, resources, settlements)
 	_refresh()
 
@@ -102,13 +101,13 @@ func _on_move_pressed(dir_name: String) -> void:
 	var d: Vector2i = MOVE_DIRS[dir_name]
 	if not player.try_move(tiles, d.x, d.y):
 		# 海/マップ外。ターンは消費しない (Canvas版の「無駄手が出ない」感覚に合わせる)
-		_add_log("そちらへは進めない。")
+		_add_log("> 移動不可")
 		_refresh()
 		return
 	# 移動 → 探索範囲更新 → ターン+1 → 描画更新
 	player.reveal(tiles)
 	turn_system.advance_turn()
-	_add_log("%s へ進んだ。" % _dir_label(dir_name))
+	_add_log("> %s 移動" % _dir_label(dir_name))
 	_refresh()
 
 ## 採集。足元→隣接の順に探し、見つかればターンを消費する。
@@ -116,49 +115,49 @@ func _on_move_pressed(dir_name: String) -> void:
 func _on_gather_pressed() -> void:
 	# 上限チェックを先に行う。持てないのにターンだけ減るのを防ぐ。
 	if resources.is_full():
-		_add_log("持ちきれない。拠点へ戻ろう。")
+		_add_log("> 所持上限")
 		_refresh()
 		return
 	var target = resources.find_gather_target(player.grid_x, player.grid_y)
 	if target == null:
-		_add_log("近くに採集できるものがない。")
+		_add_log("> 対象なし")
 		_refresh()
 		return
 	var got := resources.gather(target.x, target.y)
 	if got.is_empty():
-		_add_log("近くに採集できるものがない。")
+		_add_log("> 対象なし")
 		_refresh()
 		return
 	turn_system.advance_turn()
 	var label: String = ResourceSystem.LABELS.get(got["type"], got["type"])
-	_add_log("%s を %d 採集した。" % [label, got["amount"]])
+	_add_log("> %s +%d" % [label, got["amount"]])
 	if got["depleted"]:
-		_add_log("ここは採り尽くした。")
+		_add_log("> 枯渇")
 	if resources.is_full():
-		_add_log("もう持てない。")
+		_add_log("> 所持上限 %d/%d" % [resources.carried_total(), ResourceSystem.CARRY_CAPACITY])
 	_refresh()
 
 ## 納品。BASE の上にいて、かつ所持品がある場合のみ成功しターンを消費する。
 func _on_deposit_pressed() -> void:
 	var settlement := settlements.settlement_at(player.grid_x, player.grid_y)
 	if settlement.is_empty():
-		_add_log("ここは拠点ではない。")
+		_add_log("> 拠点外")
 		_refresh()
 		return
 	if resources.carried_total() <= 0:
-		_add_log("納めるものがない。")
+		_add_log("> 所持なし")
 		_refresh()
 		return
 	var taken := resources.take_all()
 	var total := settlements.deposit(settlement, taken)
 	turn_system.advance_turn()
-	_add_log("拠点に %d 納めた。" % total)
+	_add_log("> 納入 %d" % total)
 	_refresh()
 
 func _on_wait_pressed() -> void:
 	player.reveal(tiles)
 	turn_system.advance_turn()
-	_add_log("その場で待った。")
+	_add_log("> 待機")
 	_refresh()
 
 # ── 表示更新 ─────────────────────────────────────────────────────
@@ -173,8 +172,8 @@ func _refresh() -> void:
 	map_camera.position = Vector2(
 		player.grid_x * MapView.TILE_PX + MapView.TILE_PX * 0.5,
 		player.grid_y * MapView.TILE_PX + MapView.TILE_PX * 0.5)
-	status_label.text = turn_system.status_text()
-	terrain_label.text = "足元: %s" % _terrain_name(tiles[player.grid_y][player.grid_x])
+	status_label.text = "TURN %04d   CARRY %d/%d" % [
+		turn_system.turn, resources.carried_total(), ResourceSystem.CARRY_CAPACITY]
 	inventory_label.text = resources.inventory_text()
 	storage_label.text = settlements.storage_text(settlements.get_base())
 	log_label.text = "\n".join(log_lines)
@@ -182,26 +181,13 @@ func _refresh() -> void:
 ## 採れるものが無いときはボタンを無効化する。
 ## 「押せるのに何も起きない」を無くしてスマホでの空タップを減らす。
 func _update_gather_button(target) -> void:
-	if resources.is_full():
-		btn_gather.disabled = true
-		btn_gather.text = "満杯"
-		return
-	if target == null:
-		btn_gather.disabled = true
-		btn_gather.text = "採る"
-		return
-	btn_gather.disabled = false
-	var node := resources.node_at(target.x, target.y)
-	var type: String = node.get("type", "")
-	btn_gather.text = "採る:%s" % ResourceSystem.SHORT_LABELS.get(type, "?")
+	btn_gather.disabled = resources.is_full() or target == null
 
 ## 納品ボタン: BASE 上かつ所持品ありのときだけ押せる。
 func _update_deposit_button() -> void:
 	var on_base := settlements.has_settlement_at(player.grid_x, player.grid_y)
 	var carrying := resources.carried_total()
-	var can_deposit := on_base and carrying > 0
-	btn_deposit.disabled = not can_deposit
-	btn_deposit.text = "納品:%d" % carrying if can_deposit else "納品"
+	btn_deposit.disabled = not (on_base and carrying > 0)
 
 func _add_log(line: String) -> void:
 	log_lines.append(line)
@@ -216,13 +202,3 @@ func _dir_label(dir_name: String) -> String:
 		"right": return "東"
 	return dir_name
 
-func _terrain_name(t: int) -> String:
-	match t:
-		MapGenerator.Tile.SEA: return "海"
-		MapGenerator.Tile.GRASS: return "草原"
-		MapGenerator.Tile.FOREST: return "小さい森"
-		MapGenerator.Tile.DEEP_FOREST: return "大きい森"
-		MapGenerator.Tile.MOUNTAIN: return "山"
-		MapGenerator.Tile.HIGH_MOUNTAIN: return "高い山"
-		MapGenerator.Tile.RIVER: return "川"
-	return "?"

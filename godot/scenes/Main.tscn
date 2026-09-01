@@ -1,24 +1,14 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/MapView.gd" id="2_mapview"]
+[ext_resource type="Theme" path="res://assets/ui_theme.tres" id="3_theme"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hud"]
-bg_color = Color(0.086, 0.094, 0.11, 1)
-content_margin_left = 8.0
-content_margin_top = 6.0
-content_margin_right = 8.0
-content_margin_bottom = 6.0
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_log"]
-bg_color = Color(0.067, 0.075, 0.09, 1)
-content_margin_left = 8.0
-content_margin_top = 6.0
-content_margin_right = 8.0
-content_margin_bottom = 6.0
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_map"]
-bg_color = Color(0.078, 0.086, 0.106, 1)
+[sub_resource type="StyleBoxFlat" id="map_frame"]
+bg_color = Color(0.02, 0.02, 0.02, 1)
+border_width_top = 1
+border_width_bottom = 1
+border_color = Color(0.878, 0.878, 0.878, 1)
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -27,6 +17,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+theme = ExtResource("3_theme")
 script = ExtResource("1_main")
 
 [node name="Root" type="VBoxContainer" parent="."]
@@ -38,47 +29,38 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 0
 
-[node name="TopHud" type="PanelContainer" parent="Root"]
+[node name="TopHud" type="MarginContainer" parent="Root"]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_hud")
+theme_override_constants/margin_left = 6
+theme_override_constants/margin_top = 4
+theme_override_constants/margin_right = 6
+theme_override_constants/margin_bottom = 4
 
 [node name="HudRows" type="VBoxContainer" parent="Root/TopHud"]
 layout_mode = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 1
 
 [node name="StatusLabel" type="Label" parent="Root/TopHud/HudRows"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.925, 0.902, 0.784, 1)
-theme_override_font_sizes/font_size = 15
-text = "世代 1 / 年 1 / ターン 0"
-
-[node name="TerrainLabel" type="Label" parent="Root/TopHud/HudRows"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_colors/font_color = Color(0.596, 0.647, 0.706, 1)
-theme_override_font_sizes/font_size = 13
-text = "足元: 草原"
+text = "TURN 0000   CARRY 0/8"
 
 [node name="InventoryLabel" type="Label" parent="Root/TopHud/HudRows"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.886, 0.792, 0.549, 1)
-theme_override_font_sizes/font_size = 13
-text = "果 0 / 木 0 / 石 0 / 火 0"
+text = "F 00  W 00  S 00  L 00"
 
 [node name="StorageLabel" type="Label" parent="Root/TopHud/HudRows"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.667, 0.729, 0.639, 1)
-theme_override_font_sizes/font_size = 12
-text = "BASE  果 0 木 0 石 0 火 0"
+theme_override_colors/font_color = Color(0.467, 0.467, 0.467, 1)
+text = "BASE F 00 W 00 S 00 L 00"
 
 [node name="MapFrame" type="PanelContainer" parent="Root"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_styles/panel = SubResource("StyleBoxFlat_map")
+theme_override_styles/panel = SubResource("map_frame")
 
 [node name="MapViewportContainer" type="SubViewportContainer" parent="Root/MapFrame"]
 layout_mode = 2
@@ -87,7 +69,7 @@ stretch = true
 [node name="MapViewport" type="SubViewport" parent="Root/MapFrame/MapViewportContainer"]
 unique_name_in_owner = true
 handle_input_locally = false
-size = Vector2i(360, 380)
+size = Vector2i(360, 440)
 render_target_update_mode = 4
 
 [node name="MapView" type="Node2D" parent="Root/MapFrame/MapViewportContainer/MapViewport"]
@@ -97,96 +79,102 @@ script = ExtResource("2_mapview")
 [node name="MapCamera" type="Camera2D" parent="Root/MapFrame/MapViewportContainer/MapViewport"]
 unique_name_in_owner = true
 
-[node name="LogPanel" type="PanelContainer" parent="Root"]
+[node name="LogBox" type="MarginContainer" parent="Root"]
 layout_mode = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_log")
+theme_override_constants/margin_left = 6
+theme_override_constants/margin_top = 3
+theme_override_constants/margin_right = 6
+theme_override_constants/margin_bottom = 3
 
-[node name="LogLabel" type="Label" parent="Root/LogPanel"]
+[node name="LogLabel" type="Label" parent="Root/LogBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 52)
+custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
-theme_override_colors/font_color = Color(0.722, 0.749, 0.788, 1)
-theme_override_font_sizes/font_size = 13
-text = "島に降り立った。"
-vertical_alignment = 1
+theme_override_colors/font_color = Color(0.467, 0.467, 0.467, 1)
+theme_override_font_sizes/font_size = 11
+text = "> 起動"
+vertical_alignment = 2
 
 [node name="Controls" type="MarginContainer" parent="Root"]
 layout_mode = 2
-theme_override_constants/margin_left = 10
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 10
-theme_override_constants/margin_bottom = 14
+theme_override_constants/margin_left = 6
+theme_override_constants/margin_top = 0
+theme_override_constants/margin_right = 6
+theme_override_constants/margin_bottom = 8
 
-[node name="Pad" type="VBoxContainer" parent="Root/Controls"]
+[node name="Pad" type="HBoxContainer" parent="Root/Controls"]
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 8
 
-[node name="RowUp" type="HBoxContainer" parent="Root/Controls/Pad"]
+[node name="Dir" type="GridContainer" parent="Root/Controls/Pad"]
 layout_mode = 2
-alignment = 1
+theme_override_constants/h_separation = 3
+theme_override_constants/v_separation = 3
+columns = 3
 
-[node name="BtnUp" type="Button" parent="Root/Controls/Pad/RowUp"]
+[node name="PadA" type="Control" parent="Root/Controls/Pad/Dir"]
+custom_minimum_size = Vector2(52, 42)
+layout_mode = 2
+
+[node name="BtnUp" type="Button" parent="Root/Controls/Pad/Dir"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(88, 56)
+custom_minimum_size = Vector2(52, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
-text = "▲"
+text = "↑"
 
-[node name="RowMid" type="HBoxContainer" parent="Root/Controls/Pad"]
+[node name="PadB" type="Control" parent="Root/Controls/Pad/Dir"]
+custom_minimum_size = Vector2(52, 42)
 layout_mode = 2
-alignment = 1
-theme_override_constants/separation = 6
 
-[node name="BtnLeft" type="Button" parent="Root/Controls/Pad/RowMid"]
+[node name="BtnLeft" type="Button" parent="Root/Controls/Pad/Dir"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(88, 56)
+custom_minimum_size = Vector2(52, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
-text = "◀"
+text = "←"
 
-[node name="BtnGather" type="Button" parent="Root/Controls/Pad/RowMid"]
+[node name="BtnDown" type="Button" parent="Root/Controls/Pad/Dir"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(96, 56)
+custom_minimum_size = Vector2(52, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "採る"
+text = "↓"
 
-[node name="BtnRight" type="Button" parent="Root/Controls/Pad/RowMid"]
+[node name="BtnRight" type="Button" parent="Root/Controls/Pad/Dir"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(88, 56)
+custom_minimum_size = Vector2(52, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
-text = "▶"
+text = "→"
 
-[node name="RowDown" type="HBoxContainer" parent="Root/Controls/Pad"]
+[node name="Act" type="GridContainer" parent="Root/Controls/Pad"]
 layout_mode = 2
-alignment = 1
-theme_override_constants/separation = 6
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 3
+theme_override_constants/v_separation = 3
+columns = 2
 
-[node name="BtnDown" type="Button" parent="Root/Controls/Pad/RowDown"]
+[node name="BtnGather" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(88, 56)
+custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
-text = "▼"
+size_flags_horizontal = 3
+text = "採取"
 
-[node name="BtnDeposit" type="Button" parent="Root/Controls/Pad/RowDown"]
+[node name="BtnDeposit" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(84, 56)
+custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "納品"
+size_flags_horizontal = 3
+text = "納入"
 
-[node name="BtnWait" type="Button" parent="Root/Controls/Pad/RowDown"]
+[node name="BtnWait" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(64, 56)
+custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "待つ"
+size_flags_horizontal = 3
+text = "待機"
 
-[node name="BtnNewGame" type="Button" parent="Root/Controls/Pad/RowDown"]
+[node name="BtnNewGame" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(64, 56)
+custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
-theme_override_font_sizes/font_size = 11
-text = "NEW"
+size_flags_horizontal = 3
+text = "再開"

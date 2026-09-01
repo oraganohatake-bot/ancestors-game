@@ -1,0 +1,164 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/Main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/MapView.gd" id="2_mapview"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_hud"]
+bg_color = Color(0.086, 0.094, 0.11, 1)
+content_margin_left = 8.0
+content_margin_top = 6.0
+content_margin_right = 8.0
+content_margin_bottom = 6.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_log"]
+bg_color = Color(0.067, 0.075, 0.09, 1)
+content_margin_left = 8.0
+content_margin_top = 6.0
+content_margin_right = 8.0
+content_margin_bottom = 6.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_map"]
+bg_color = Color(0.078, 0.086, 0.106, 1)
+
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
+
+[node name="Root" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="TopHud" type="PanelContainer" parent="Root"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_hud")
+
+[node name="HudRows" type="VBoxContainer" parent="Root/TopHud"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="StatusLabel" type="Label" parent="Root/TopHud/HudRows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.925, 0.902, 0.784, 1)
+theme_override_font_sizes/font_size = 15
+text = "世代 1 / 年 1 / ターン 0"
+
+[node name="TerrainLabel" type="Label" parent="Root/TopHud/HudRows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.596, 0.647, 0.706, 1)
+theme_override_font_sizes/font_size = 13
+text = "足元: 草原"
+
+[node name="MapFrame" type="PanelContainer" parent="Root"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_map")
+
+[node name="MapViewportContainer" type="SubViewportContainer" parent="Root/MapFrame"]
+layout_mode = 2
+stretch = true
+
+[node name="MapViewport" type="SubViewport" parent="Root/MapFrame/MapViewportContainer"]
+unique_name_in_owner = true
+handle_input_locally = false
+size = Vector2i(360, 380)
+render_target_update_mode = 4
+
+[node name="MapView" type="Node2D" parent="Root/MapFrame/MapViewportContainer/MapViewport"]
+unique_name_in_owner = true
+script = ExtResource("2_mapview")
+
+[node name="MapCamera" type="Camera2D" parent="Root/MapFrame/MapViewportContainer/MapViewport"]
+unique_name_in_owner = true
+
+[node name="LogPanel" type="PanelContainer" parent="Root"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_log")
+
+[node name="LogLabel" type="Label" parent="Root/LogPanel"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.722, 0.749, 0.788, 1)
+theme_override_font_sizes/font_size = 13
+text = "島に降り立った。"
+vertical_alignment = 1
+
+[node name="Controls" type="MarginContainer" parent="Root"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 14
+
+[node name="Pad" type="VBoxContainer" parent="Root/Controls"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="RowUp" type="HBoxContainer" parent="Root/Controls/Pad"]
+layout_mode = 2
+alignment = 1
+
+[node name="BtnUp" type="Button" parent="Root/Controls/Pad/RowUp"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(88, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "▲"
+
+[node name="RowMid" type="HBoxContainer" parent="Root/Controls/Pad"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 6
+
+[node name="BtnLeft" type="Button" parent="Root/Controls/Pad/RowMid"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(88, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "◀"
+
+[node name="BtnWait" type="Button" parent="Root/Controls/Pad/RowMid"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "待つ"
+
+[node name="BtnRight" type="Button" parent="Root/Controls/Pad/RowMid"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(88, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "▶"
+
+[node name="RowDown" type="HBoxContainer" parent="Root/Controls/Pad"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 6
+
+[node name="BtnDown" type="Button" parent="Root/Controls/Pad/RowDown"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(88, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "▼"
+
+[node name="BtnNewGame" type="Button" parent="Root/Controls/Pad/RowDown"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "NEW GAME"

@@ -1,0 +1,3 @@
+# Godot 4 のインポートキャッシュ (再生成されるので追跡しない)
+.godot/
+*.translation

@@ -31,12 +31,24 @@ const COLOR_GRID := Color(0, 0, 0, 0.16)    # タイル境界のごく薄い線
 const COLOR_PLAYER := Color("f2e6c8")
 const COLOR_PLAYER_RING := Color("e8b64c")
 
+# 資源マーカーの色。地形色から浮くように彩度を上げ、種類を色で区別する。
+const RESOURCE_COLORS := {
+	ResourceSystem.FRUIT: Color("e05a4d"),
+	ResourceSystem.WOOD:  Color("c98a3e"),
+	ResourceSystem.STONE: Color("d3d7dc"),
+	ResourceSystem.FLINT: Color("8d7ce0"),
+}
+const COLOR_TARGET_RING := Color("f5e27a")  # 採集できる資源の強調
+
 var tiles: Array = []
 var player: PlayerController = null
+var resources: ResourceSystem = null
+var gather_target = null                    # Vector2i or null
 
-func setup(p_tiles: Array, p_player: PlayerController) -> void:
+func setup(p_tiles: Array, p_player: PlayerController, p_resources: ResourceSystem) -> void:
 	tiles = p_tiles
 	player = p_player
+	resources = p_resources
 	queue_redraw()
 
 func _draw() -> void:
@@ -55,8 +67,10 @@ func _draw() -> void:
 			var col: Color = COLORS.get(t, Color("505050"))
 			draw_rect(r, col, true)
 			_draw_tile_symbol(t, x, y, col)
+			_draw_resource(x, y)
 			draw_rect(r, COLOR_GRID, false, 1.0)
 
+	_draw_gather_target()
 	_draw_player()
 
 ## 地形ごとの小さな記号。ドット感を出しつつ地形を読めるようにする。
@@ -101,6 +115,43 @@ func _draw_tile_symbol(t: int, x: int, y: int, base: Color) -> void:
 			var lw := base.lightened(0.18)
 			draw_rect(Rect2(ox + 3, oy + 6, 8, 1), lw, true)
 			draw_rect(Rect2(ox + 9, oy + 12, 8, 1), lw, true)
+
+## 資源マーカー。枯れたノードは描かない (採り尽くした場所が一目で分かる)。
+func _draw_resource(x: int, y: int) -> void:
+	if resources == null:
+		return
+	var node := resources.node_at(x, y)
+	if node.is_empty() or node["remaining"] <= 0:
+		return
+	var type: String = node["type"]
+	var col: Color = RESOURCE_COLORS.get(type, Color.WHITE)
+	var cx := x * TILE_PX + TILE_PX * 0.5
+	var cy := y * TILE_PX + TILE_PX * 0.5
+
+	# 背面の暗い縁取り。地形色に埋もれないようにする。
+	draw_circle(Vector2(cx, cy), 4.2, Color(0, 0, 0, 0.55))
+	match type:
+		ResourceSystem.FRUIT:
+			draw_circle(Vector2(cx, cy), 3.0, col)          # 実: 丸
+		ResourceSystem.WOOD:
+			draw_rect(Rect2(cx - 3, cy - 1.5, 6, 3), col, true)   # 枝: 横棒
+		ResourceSystem.STONE:
+			draw_colored_polygon(PackedVector2Array([        # 石: 四角を傾けた形
+				Vector2(cx, cy - 3), Vector2(cx + 3, cy),
+				Vector2(cx, cy + 3), Vector2(cx - 3, cy)]), col)
+		ResourceSystem.FLINT:
+			draw_colored_polygon(PackedVector2Array([        # 火打石: 鋭い三角
+				Vector2(cx, cy - 3.5), Vector2(cx + 3, cy + 2.5),
+				Vector2(cx - 3, cy + 2.5)]), col)
+
+## 今まさに採れる資源を囲む。「採集ボタンが何に効くか」を迷わせない。
+func _draw_gather_target() -> void:
+	if gather_target == null:
+		return
+	var t: Vector2i = gather_target
+	var cx := t.x * TILE_PX + TILE_PX * 0.5
+	var cy := t.y * TILE_PX + TILE_PX * 0.5
+	draw_arc(Vector2(cx, cy), TILE_PX * 0.42, 0, TAU, 16, COLOR_TARGET_RING, 1.5)
 
 func _draw_player() -> void:
 	var cx := player.grid_x * TILE_PX + TILE_PX * 0.5

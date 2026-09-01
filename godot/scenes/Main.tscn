@@ -60,6 +60,13 @@ theme_override_colors/font_color = Color(0.596, 0.647, 0.706, 1)
 theme_override_font_sizes/font_size = 13
 text = "足元: 草原"
 
+[node name="InventoryLabel" type="Label" parent="Root/TopHud/HudRows"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.886, 0.792, 0.549, 1)
+theme_override_font_sizes/font_size = 13
+text = "果 0 / 木 0 / 石 0 / 火 0"
+
 [node name="MapFrame" type="PanelContainer" parent="Root"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -130,12 +137,12 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "◀"
 
-[node name="BtnWait" type="Button" parent="Root/Controls/Pad/RowMid"]
+[node name="BtnGather" type="Button" parent="Root/Controls/Pad/RowMid"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(96, 56)
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
-text = "待つ"
+text = "採る"
 
 [node name="BtnRight" type="Button" parent="Root/Controls/Pad/RowMid"]
 unique_name_in_owner = true
@@ -156,9 +163,16 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 20
 text = "▼"
 
-[node name="BtnNewGame" type="Button" parent="Root/Controls/Pad/RowDown"]
+[node name="BtnWait" type="Button" parent="Root/Controls/Pad/RowDown"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(96, 56)
+custom_minimum_size = Vector2(70, 56)
 layout_mode = 2
 theme_override_font_sizes/font_size = 13
-text = "NEW GAME"
+text = "待つ"
+
+[node name="BtnNewGame" type="Button" parent="Root/Controls/Pad/RowDown"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(88, 56)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "NEW"

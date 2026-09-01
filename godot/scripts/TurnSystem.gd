@@ -43,6 +43,8 @@ func _on_turn_advanced() -> void:
 
 # ── Phase 2 以降で実装するフック群 (今は意図的に空) ──────────────
 func _regrow_resources() -> void:
+	# Phase 2A では採り尽くしたノードは枯れたまま。
+	# ここで node["regrow_timer"] を進めて remaining を戻す予定 (Phase 2B)。
 	pass          # 資源回復 (森の果物 / 山の石 の regrow)
 
 func _grow_population() -> void:

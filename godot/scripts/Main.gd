@@ -25,6 +25,7 @@ const LOG_LINES := 3          # ログは数行だけ (画面をごちゃつか�
 var map_gen := MapGenerator.new()
 var turn_system := TurnSystem.new()
 var player := PlayerController.new()
+var resources := ResourceSystem.new()
 
 var tiles: Array = []
 var log_lines: Array[String] = []
@@ -33,7 +34,9 @@ var log_lines: Array[String] = []
 @onready var map_camera: Camera2D = %MapCamera
 @onready var status_label: Label = %StatusLabel
 @onready var terrain_label: Label = %TerrainLabel
+@onready var inventory_label: Label = %InventoryLabel
 @onready var log_label: Label = %LogLabel
+@onready var btn_gather: Button = %BtnGather
 
 func _ready() -> void:
 	# 方向ボタン: 押しっぱなしでの連打は Phase 1 では不要 (1タップ1マス)
@@ -42,19 +45,24 @@ func _ready() -> void:
 	%BtnLeft.pressed.connect(_on_move_pressed.bind("left"))
 	%BtnRight.pressed.connect(_on_move_pressed.bind("right"))
 	%BtnWait.pressed.connect(_on_wait_pressed)
+	%BtnGather.pressed.connect(_on_gather_pressed)
 	%BtnNewGame.pressed.connect(new_game)
 	# SubViewportContainer.stretch = true なので SubViewport は
 	# コンテナサイズに自動追従する (端末ごとの縦横比はここで吸収される)。
 	new_game()
 
 func new_game() -> void:
-	tiles = map_gen.generate()
+	# マップと資源で同じ seed を使い、「このマップならこの資源配置」を固定する。
+	var seed_value := randi() & 0x7fffffff
+	tiles = map_gen.generate(seed_value)
+	resources.generate(tiles, seed_value)
+	resources.reset_inventory()
 	turn_system.reset()
 	player.place_at(map_gen.find_spawn(tiles))
 	player.reveal(tiles)
 	log_lines.clear()
 	_add_log("島に降り立った。")
-	map_view.setup(tiles, player)
+	map_view.setup(tiles, player, resources)
 	_refresh()
 
 # ── 入力 ─────────────────────────────────────────────────────────
@@ -66,7 +74,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_on_move_pressed(dir_name)
 			get_viewport().set_input_as_handled()
 			return
-	if event.is_action_pressed("wait_turn"):
+	if event.is_action_pressed("gather"):
+		_on_gather_pressed()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("wait_turn"):
 		_on_wait_pressed()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("new_game"):
@@ -86,6 +97,26 @@ func _on_move_pressed(dir_name: String) -> void:
 	_add_log("%s へ進んだ。" % _dir_label(dir_name))
 	_refresh()
 
+## 採集。足元→隣接の順に探し、見つかればターンを消費する。
+## 何も無ければターンは進めない (空振りでターンを損しない)。
+func _on_gather_pressed() -> void:
+	var target = resources.find_gather_target(player.grid_x, player.grid_y)
+	if target == null:
+		_add_log("近くに採集できるものがない。")
+		_refresh()
+		return
+	var got := resources.gather(target.x, target.y)
+	if got.is_empty():
+		_add_log("近くに採集できるものがない。")
+		_refresh()
+		return
+	turn_system.advance_turn()
+	var label: String = ResourceSystem.LABELS.get(got["type"], got["type"])
+	_add_log("%s を %d 採集した。" % [label, got["amount"]])
+	if got["depleted"]:
+		_add_log("ここは採り尽くした。")
+	_refresh()
+
 func _on_wait_pressed() -> void:
 	player.reveal(tiles)
 	turn_system.advance_turn()
@@ -94,14 +125,31 @@ func _on_wait_pressed() -> void:
 
 # ── 表示更新 ─────────────────────────────────────────────────────
 func _refresh() -> void:
+	# 採集対象を先に決めてから描く (マップ上の強調とボタン表示を一致させる)
+	var target = resources.find_gather_target(player.grid_x, player.grid_y)
+	map_view.gather_target = target
 	map_view.queue_redraw()
+	_update_gather_button(target)
 	# プレイヤー中心カメラ (マップは画面に収まらないのでスクロールさせる)
 	map_camera.position = Vector2(
 		player.grid_x * MapView.TILE_PX + MapView.TILE_PX * 0.5,
 		player.grid_y * MapView.TILE_PX + MapView.TILE_PX * 0.5)
 	status_label.text = turn_system.status_text()
 	terrain_label.text = "足元: %s" % _terrain_name(tiles[player.grid_y][player.grid_x])
+	inventory_label.text = resources.inventory_text()
 	log_label.text = "\n".join(log_lines)
+
+## 採れるものが無いときはボタンを無効化する。
+## 「押せるのに何も起きない」を無くしてスマホでの空タップを減らす。
+func _update_gather_button(target) -> void:
+	if target == null:
+		btn_gather.disabled = true
+		btn_gather.text = "採る"
+		return
+	btn_gather.disabled = false
+	var node := resources.node_at(target.x, target.y)
+	var type: String = node.get("type", "")
+	btn_gather.text = "採る:%s" % ResourceSystem.SHORT_LABELS.get(type, "?")
 
 func _add_log(line: String) -> void:
 	log_lines.append(line)

@@ -54,7 +54,7 @@ text = "F 00  W 00  S 00  L 00"
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.467, 0.467, 0.467, 1)
-text = "BASE F 00 W 00 S 00 L 00"
+text = "BASE POP 00/30  F00 W00 S00 L00"
 
 [node name="MapFrame" type="PanelContainer" parent="Root"]
 unique_name_in_owner = true
@@ -171,6 +171,13 @@ custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "設営"
+
+[node name="BtnSend" type="Button" parent="Root/Controls/Pad/Act"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "移住"
 
 [node name="BtnWait" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true

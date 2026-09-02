@@ -4,9 +4,10 @@ extends Control
 ##
 ## ここまでのスコープ:
 ##   ランダムマップ / タイル移動 / 探索(記憶される霧) / ターン進行 / スマホ向けUI /
-##   資源の配置・採集 / 所持上限 / BASE 納入 / 資源regrow / CAMP (遠征用の中継拠点)
+##   資源の配置・採集 / 所持上限 / BASE 納入 / 資源regrow / CAMP (遠征用の中継拠点) /
+##   拠点人口 (成長・食料消費・CAMP への移住)
 ## まだ載せないもの:
-##   人口・労働者・集落資源圧・動物・狩り・クラフト・CAMP間輸送・セーブ
+##   労働者アサイン・集落資源圧・餓死・動物・狩り・クラフト・CAMP間輸送・セーブ
 ##
 ## 画面構成 (Canvas版に合わせた縦持ち):
 ##   上部: ステータス   中央: マップ   下部: ログ + 方向ボタン
@@ -41,10 +42,13 @@ var log_lines: Array[String] = []
 @onready var btn_gather: Button = %BtnGather
 @onready var btn_deposit: Button = %BtnDeposit
 @onready var btn_camp: Button = %BtnCamp
+@onready var btn_send: Button = %BtnSend
 
 func _ready() -> void:
-	# 毎ターンの資源回復を TurnSystem に任せる (Main は流れだけを持つ)
+	# 毎ターンの世界側の処理 (資源回復 / 人口 / 食料) は TurnSystem に任せる。
+	# Main は入力と表示だけを持つ。
 	turn_system.resources = resources
+	turn_system.settlements = settlements
 	# 方向ボタン: 押しっぱなしでの連打は Phase 1 では不要 (1タップ1マス)
 	%BtnUp.pressed.connect(_on_move_pressed.bind("up"))
 	%BtnDown.pressed.connect(_on_move_pressed.bind("down"))
@@ -54,6 +58,7 @@ func _ready() -> void:
 	%BtnGather.pressed.connect(_on_gather_pressed)
 	%BtnDeposit.pressed.connect(_on_deposit_pressed)
 	%BtnCamp.pressed.connect(_on_camp_pressed)
+	%BtnSend.pressed.connect(_on_send_pressed)
 	%BtnNewGame.pressed.connect(new_game)
 	# SubViewportContainer.stretch = true なので SubViewport は
 	# コンテナサイズに自動追従する (端末ごとの縦横比はここで吸収される)。
@@ -97,6 +102,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("build_camp"):
 		_on_camp_pressed()
 		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("send_pop"):
+		_on_send_pressed()
+		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("wait_turn"):
 		_on_wait_pressed()
 		get_viewport().set_input_as_handled()
@@ -115,6 +123,7 @@ func _on_move_pressed(dir_name: String) -> void:
 	player.reveal(tiles)
 	turn_system.advance_turn()
 	_add_log("> %s 移動" % _dir_label(dir_name))
+	_log_turn_events()
 	_refresh()
 
 ## 採集。足元→隣接の順に探し、見つかればターンを消費する。
@@ -142,6 +151,7 @@ func _on_gather_pressed() -> void:
 		_add_log("> 枯渇")
 	if resources.is_full():
 		_add_log("> 所持上限 %d/%d" % [resources.carried_total(), ResourceSystem.CARRY_CAPACITY])
+	_log_turn_events()
 	_refresh()
 
 ## 納品。立っている拠点へ納める。BASE か CAMP かで処理を分けない。
@@ -161,6 +171,7 @@ func _on_deposit_pressed() -> void:
 	var total := settlements.deposit_to_settlement(here, taken)
 	turn_system.advance_turn()
 	_add_log("> %s 納入 %d" % [settlement["type"], total])
+	_log_turn_events()
 	_refresh()
 
 ## CAMP 設営。BASE の備蓄から資材を払い、今立っている場所に中継拠点を作る。
@@ -174,6 +185,7 @@ func _on_camp_pressed() -> void:
 		return
 	turn_system.advance_turn()
 	_add_log("> CAMP SET %d/%d" % [settlements.camp_count(), SettlementSystem.MAX_CAMPS])
+	_log_turn_events()
 	_refresh()
 
 func _camp_fail_label(reason: String) -> String:
@@ -186,10 +198,53 @@ func _camp_fail_label(reason: String) -> String:
 			SettlementSystem.CAMP_COST[ResourceSystem.STONE]]
 	return "設営不可"
 
+## 移住。今立っている CAMP へ BASE から SEND_POP_AMOUNT 人を移す。
+## Phase 2E では送った人は「そこにいる」だけで、まだ働かない。
+## 失敗 (CAMP外 / BASE人口不足 / CAMP上限) ではターンを消費しない。
+func _on_send_pressed() -> void:
+	var camp := settlements.settlement_at(player.grid_x, player.grid_y)
+	var result := settlements.send_population_to_camp(camp)
+	if not result["ok"]:
+		_add_log("> %s" % _send_fail_label(result["reason"]))
+		_refresh()
+		return
+	turn_system.advance_turn()
+	_add_log("> SEND %d" % result["amount"])
+	_log_turn_events()
+	_refresh()
+
+func _send_fail_label(reason: String) -> String:
+	match reason:
+		SettlementSystem.REASON_NOT_CAMP: return "移住不可 CAMP外"
+		SettlementSystem.REASON_BASE_LOW: return "移住不可 BASE人口"
+		SettlementSystem.REASON_CAMP_FULL: return "移住不可 CAMP上限 %d" % SettlementSystem.CAMP_POPULATION_CAP
+	return "移住不可"
+
+## そのターンに起きた人口/食料の出来事を短く出す。
+## 集落ごとに並べず1行にまとめる (ログ3行を行動の記録として残す)。
+func _log_turn_events() -> void:
+	var events: Dictionary = turn_system.last_events
+	for s in events.get("grown", []):
+		_add_log("> %s POP +1" % s["type"])
+	var food: Array = events.get("food", [])
+	if food.is_empty():
+		return
+	var eaten := 0
+	var shortage := false
+	for r in food:
+		eaten += int(r["eaten"])
+		if r["shortage"]:
+			shortage = true
+	if eaten > 0:
+		_add_log("> FOOD -%d" % eaten)
+	if shortage:
+		_add_log("> FOOD LOW")
+
 func _on_wait_pressed() -> void:
 	player.reveal(tiles)
 	turn_system.advance_turn()
 	_add_log("> 待機")
+	_log_turn_events()
 	_refresh()
 
 # ── 表示更新 ─────────────────────────────────────────────────────
@@ -201,6 +256,7 @@ func _refresh() -> void:
 	_update_gather_button(target)
 	_update_deposit_button()
 	_update_camp_button()
+	_update_send_button()
 	# プレイヤー中心カメラ (マップは画面に収まらないのでスクロールさせる)
 	map_camera.position = Vector2(
 		player.grid_x * MapView.TILE_PX + MapView.TILE_PX * 0.5,
@@ -230,6 +286,11 @@ func _update_deposit_button() -> void:
 func _update_camp_button() -> void:
 	btn_camp.disabled = not settlements.can_build_camp(
 		Vector2i(player.grid_x, player.grid_y))
+
+## 移住ボタン: CAMP の上で、BASE に余力があり、CAMP に空きがあるときだけ押せる。
+func _update_send_button() -> void:
+	var here := settlements.settlement_at(player.grid_x, player.grid_y)
+	btn_send.disabled = not settlements.can_send_population(here)
 
 func _add_log(line: String) -> void:
 	log_lines.append(line)

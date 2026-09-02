@@ -5,9 +5,10 @@ extends Control
 ## ここまでのスコープ:
 ##   ランダムマップ / タイル移動 / 探索(記憶される霧) / ターン進行 / スマホ向けUI /
 ##   資源の配置・採集 / 所持上限 / BASE 納入 / 資源regrow / CAMP (遠征用の中継拠点) /
-##   拠点人口 (成長・食料消費・CAMP への移住)
+##   拠点人口 (成長・食料消費・CAMP への移住) /
+##   労働者アサイン・自動採集・集落の生活圧
 ## まだ載せないもの:
-##   労働者アサイン・集落資源圧・餓死・動物・狩り・クラフト・CAMP間輸送・セーブ
+##   餓死・動物・狩り・クラフト・建物・CAMP間輸送・セーブ
 ##
 ## 画面構成 (Canvas版に合わせた縦持ち):
 ##   上部: ステータス   中央: マップ   下部: ログ + 方向ボタン
@@ -43,6 +44,9 @@ var log_lines: Array[String] = []
 @onready var btn_deposit: Button = %BtnDeposit
 @onready var btn_camp: Button = %BtnCamp
 @onready var btn_send: Button = %BtnSend
+@onready var btn_job_kind: Button = %BtnJobKind
+@onready var btn_assign: Button = %BtnAssign
+@onready var job_label: Label = %JobLabel
 
 func _ready() -> void:
 	# 毎ターンの世界側の処理 (資源回復 / 人口 / 食料) は TurnSystem に任せる。
@@ -59,6 +63,8 @@ func _ready() -> void:
 	%BtnDeposit.pressed.connect(_on_deposit_pressed)
 	%BtnCamp.pressed.connect(_on_camp_pressed)
 	%BtnSend.pressed.connect(_on_send_pressed)
+	%BtnJobKind.pressed.connect(_on_job_kind_pressed)
+	%BtnAssign.pressed.connect(_on_assign_pressed)
 	%BtnNewGame.pressed.connect(new_game)
 	# SubViewportContainer.stretch = true なので SubViewport は
 	# コンテナサイズに自動追従する (端末ごとの縦横比はここで吸収される)。
@@ -104,6 +110,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("send_pop"):
 		_on_send_pressed()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("job_kind"):
+		_on_job_kind_pressed()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("assign_worker"):
+		_on_assign_pressed()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("wait_turn"):
 		_on_wait_pressed()
@@ -220,25 +232,73 @@ func _send_fail_label(reason: String) -> String:
 		SettlementSystem.REASON_CAMP_FULL: return "移住不可 CAMP上限 %d" % SettlementSystem.CAMP_POPULATION_CAP
 	return "移住不可"
 
-## そのターンに起きた人口/食料の出来事を短く出す。
+# ── 労働者アサイン ───────────────────────────────────────────────
+## 専用画面は作らない。ボタン2つの循環方式で割当を作る:
+##   「職」  … 対象の仕事を切り替える (FOOD → WOOD → STONE → FOOD)
+##   「割当」… 空きがあれば +1、空きが無ければその仕事を 0 に戻す (減員)
+## どちらもターンを消費しない (割当は行動ではなく指示なので)。
+func _on_job_kind_pressed() -> void:
+	var here := settlements.settlement_at(player.grid_x, player.grid_y)
+	if here.is_empty():
+		_add_log("> 拠点外")
+		_refresh()
+		return
+	settlements.cycle_job_cursor(here)
+	_refresh()
+
+func _on_assign_pressed() -> void:
+	var here := settlements.settlement_at(player.grid_x, player.grid_y)
+	if here.is_empty():
+		_add_log("> 拠点外")
+		_refresh()
+		return
+	var job := settlements.get_job_cursor(here)
+	var result := settlements.cycle_worker(here, job)
+	var name: String = SettlementSystem.JOB_LABELS[job]
+	match result["result"]:
+		"add": _add_log("> JOB %s +1" % name)
+		"clear": _add_log("> JOB %s %d" % [name, result["delta"]])
+		_: _add_log("> 空き人口なし")
+	_refresh()
+
+## そのターンに起きた人口/食料/労働の出来事を短く出す。
 ## 集落ごとに並べず1行にまとめる (ログ3行を行動の記録として残す)。
 func _log_turn_events() -> void:
 	var events: Dictionary = turn_system.last_events
 	for s in events.get("grown", []):
 		_add_log("> %s POP +1" % s["type"])
+	# 食料は全拠点ぶんを1行にまとめる (不足も同じ行に畳んでログを増やさない)
 	var food: Array = events.get("food", [])
-	if food.is_empty():
+	if not food.is_empty():
+		var eaten := 0
+		var shortage := false
+		for r in food:
+			eaten += int(r["eaten"])
+			if r["shortage"]:
+				shortage = true
+		var food_line := "> FOOD -%d" % eaten
+		if shortage:
+			food_line += " LOW"
+		_add_log(food_line)
+	# 労働も1周期1行。拠点ごとに並べるとログが行動の記録でなくなる。
+	var work: Array = events.get("work", [])
+	if work.is_empty():
 		return
-	var eaten := 0
-	var shortage := false
-	for r in food:
-		eaten += int(r["eaten"])
-		if r["shortage"]:
-			shortage = true
-	if eaten > 0:
-		_add_log("> FOOD -%d" % eaten)
-	if shortage:
-		_add_log("> FOOD LOW")
+	var got := {}
+	var idle := false
+	for r in work:
+		for job in r["gathered"]:
+			got[job] = int(got.get(job, 0)) + int(r["gathered"][job])
+		if r["idle"]:
+			idle = true
+	if not got.is_empty():
+		var parts: Array[String] = []
+		for job in SettlementSystem.JOB_ORDER:
+			if got.has(job):
+				parts.append("%s+%d" % [SettlementSystem.JOB_SHORT[job], got[job]])
+		_add_log("> WORK %s" % " ".join(parts))
+	if idle:
+		_add_log("> AREA DEPLETED")
 
 func _on_wait_pressed() -> void:
 	player.reveal(tiles)
@@ -257,6 +317,7 @@ func _refresh() -> void:
 	_update_deposit_button()
 	_update_camp_button()
 	_update_send_button()
+	_update_job_buttons()
 	# プレイヤー中心カメラ (マップは画面に収まらないのでスクロールさせる)
 	map_camera.position = Vector2(
 		player.grid_x * MapView.TILE_PX + MapView.TILE_PX * 0.5,
@@ -269,6 +330,7 @@ func _refresh() -> void:
 	var here_settlement := settlements.settlement_at(player.grid_x, player.grid_y)
 	var shown := here_settlement if not here_settlement.is_empty() else settlements.get_base()
 	storage_label.text = settlements.storage_text(shown)
+	job_label.text = settlements.jobs_text(shown)
 	log_label.text = "\n".join(log_lines)
 
 ## 採れるものが無いときはボタンを無効化する。
@@ -291,6 +353,17 @@ func _update_camp_button() -> void:
 func _update_send_button() -> void:
 	var here := settlements.settlement_at(player.grid_x, player.grid_y)
 	btn_send.disabled = not settlements.can_send_population(here)
+
+## 労働ボタン: 拠点上で、労働に回せる人口があるときだけ押せる。
+## 「職」の表示は対象の仕事 (F/W/S)。拠点外では BASE の状態を映しておく。
+func _update_job_buttons() -> void:
+	var here := settlements.settlement_at(player.grid_x, player.grid_y)
+	var shown := here if not here.is_empty() else settlements.get_base()
+	btn_job_kind.text = "職 %s" % SettlementSystem.JOB_SHORT[settlements.get_job_cursor(shown)]
+	var on_settlement := not here.is_empty()
+	btn_job_kind.disabled = not on_settlement
+	# 空きが無くても「減員 (0 に戻す)」で押せる必要があるので max_workers で見る。
+	btn_assign.disabled = not (on_settlement and settlements.max_workers(here) > 0)
 
 func _add_log(line: String) -> void:
 	log_lines.append(line)

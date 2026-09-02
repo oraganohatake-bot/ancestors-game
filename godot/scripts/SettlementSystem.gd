@@ -1,9 +1,9 @@
 extends RefCounted
 class_name SettlementSystem
 ##
-## 拠点 (BASE / CAMP) と、その備蓄・人口 (Phase 2B → 2E)。
+## 拠点 (BASE / CAMP) と、その備蓄・人口・労働 (Phase 2B → 2F)。
 ##
-## Phase 2E の位置づけ:
+## Phase 2F の位置づけ:
 ##   BASE   … ゲーム開始地点。唯一。最初から人がいる。
 ##   CAMP   … 遠征用の中継拠点。設置時は無人。人を送ると有人になる。
 ##
@@ -15,16 +15,24 @@ class_name SettlementSystem
 ##       "population": int,
 ##       "growth_progress": float,   # 端数の人口。1.0 を超えたら +1 人
 ##       "food_shortage": bool,      # 直近の食料周期で必要量を払えなかったか
+##       "workers": { food:0, wood:0, stone:0 },
+##       "job_cursor": String,       # UI で選択中の仕事 (割当ボタンの対象)
 ##   }
 ##
 ## 備蓄も人口も拠点ごとに完全に独立。BASE と CAMP、CAMP 同士の輸送/共有は無い。
 ## CAMP の人間が BASE の食料を食べることは無い (集落は自分の備蓄だけで食う)。
 ##
-## Phase 2E で入れないもの (意図的):
-##   - 労働者アサイン / 自動採集   … Phase 2F。今は「人がいる」だけでいい
-##   - CAMP 周辺の資源圧/枯渇      … 人口が入った次の段階
-##   - 餓死 / 人口減少             … 不足はまず「成長が止まる」だけで見せる
-##   - CAMP 間輸送 / 備蓄共有       … 独立備蓄のままにして、輸送を後で「手段」にする
+## Phase 2F で繋がる循環:
+##   人口が増える → 一部を仕事に割り当てる → 拠点周辺から自動採集する
+##   → 近場が枯れる → 遠くへ出る必要が出る → CAMP を建てる意味が増える
+##   → CAMP へ人を送る → 新しい生活圏を使う
+##
+## 無人 CAMP は「収納場所」、有人 CAMP は「生活圏」。この差が今回の要。
+##
+## Phase 2F で入れないもの (意図的):
+##   - FLINT 専従労働者   … 火打石は自分の足で探す希少資源のまま残す
+##   - 餓死 / 人口減少     … 不足はまず「成長が止まる」だけで見せる
+##   - CAMP 間輸送 / 備蓄共有 / 建物 / 生産チェーン … 都市化の手前で止める
 
 const TYPE_BASE := "BASE"
 const TYPE_CAMP := "CAMP"
@@ -71,6 +79,46 @@ const SEND_POP_AMOUNT := 2
 ## 移住後に BASE に最低限残す人数。BASE を空にする移住は認めない。
 const BASE_MIN_POPULATION := 1
 
+# ── 労働 (Phase 2F) ──────────────────────────────────────────────
+## 仕事は3種類だけ。FLINT 専従は作らない
+## (火打石はプレイヤーが自分の足で探す希少資源のまま残す)。
+const JOB_FOOD := "food"
+const JOB_WOOD := "wood"
+const JOB_STONE := "stone"
+const JOB_ORDER: Array[String] = [JOB_FOOD, JOB_WOOD, JOB_STONE]
+
+## 仕事 → 実際に採る資源。
+const JOB_RESOURCE := {
+	JOB_FOOD: ResourceSystem.FRUIT,
+	JOB_WOOD: ResourceSystem.WOOD,
+	JOB_STONE: ResourceSystem.STONE,
+}
+
+const JOB_SHORT := {JOB_FOOD: "F", JOB_WOOD: "W", JOB_STONE: "S"}
+const JOB_LABELS := {JOB_FOOD: "FOOD", JOB_WOOD: "WOOD", JOB_STONE: "STONE"}
+
+## 労働に回せない人数。子供・老人・見張りのぶん。
+## これがあるので「人口 = 労働力」にはならない。
+const NON_WORKER_POPULATION := 1
+
+## 労働処理の間隔と収量。1周期で 労働者1人 = 最大1資源。
+const WORK_INTERVAL_TURNS := 5
+const WORK_YIELD_PER_WORKER := 1
+
+## 労働者が通える範囲。拠点からこの半径内しか使えないので、
+## 近場が枯れると「拠点ごと動かす (= CAMP)」しか手が無くなる。
+const WORK_RADIUS := 4
+
+## 生活圧の範囲。労働範囲より少し広い
+## (通う範囲の外側にも、住んでいるだけで薄く影響が出る)。
+const SETTLEMENT_PRESSURE_RADIUS := 5
+
+## 労働者は非労働人口より環境を強く削る (実際に資源地へ通うため)。
+const SETTLEMENT_WORKER_WEIGHT := 2.0
+
+## 圧の全体係数。ここを触るとマップの痩せ方が丸ごと変わる。
+const SETTLEMENT_PRESSURE_COEF := 0.002
+
 # ── 設置できない理由 ─────────────────────────────────────────────
 # ログ表示と分岐の両方で使うので文字列コードにしておく。
 const OK := ""
@@ -103,6 +151,9 @@ func add_settlement(type: String, position: Vector2i, population: int = 0) -> Di
 	var storage := {}
 	for r in ResourceSystem.ORDER:
 		storage[r] = 0
+	var workers := {}
+	for job in JOB_ORDER:
+		workers[job] = 0
 	var s := {
 		"type": type,
 		"position": position,
@@ -110,6 +161,8 @@ func add_settlement(type: String, position: Vector2i, population: int = 0) -> Di
 		"population": population,
 		"growth_progress": 0.0,
 		"food_shortage": false,
+		"workers": workers,
+		"job_cursor": JOB_FOOD,
 	}
 	settlements.append(s)
 	return s
@@ -334,6 +387,193 @@ func update_population_growth_all() -> Array[Dictionary]:
 			grown.append(s)
 	return grown
 
+# ── 労働者 (Phase 2F) ────────────────────────────────────────────
+func get_workers(settlement: Dictionary) -> Dictionary:
+	if settlement.is_empty():
+		return {}
+	return settlement["workers"]
+
+## 割当済みの合計人数。
+func assigned_workers(settlement: Dictionary) -> int:
+	var total := 0
+	var workers := get_workers(settlement)
+	for job in JOB_ORDER:
+		total += int(workers.get(job, 0))
+	return total
+
+## 労働に回せる上限。人口全部は使えない (NON_WORKER_POPULATION は必ず残る)。
+func max_workers(settlement: Dictionary) -> int:
+	return maxi(get_population(settlement) - NON_WORKER_POPULATION, 0)
+
+## まだ仕事に就いていない人数。
+##   available = population - NON_WORKER_POPULATION - assigned
+func available_workers(settlement: Dictionary) -> int:
+	return maxi(max_workers(settlement) - assigned_workers(settlement), 0)
+
+## 割当が人口を超えないように直す。解除した人数を返す。
+##
+## 移住で人口が抜けたときなど、population が後から減っても
+##   assigned_workers <= max(population - 1, 0)
+## を常に保つ。解除順は STONE → WOOD → FOOD の決定的な順序
+## (食料が最後まで残るように。飢えるのが一番まずい)。
+func clamp_workers(settlement: Dictionary) -> int:
+	if settlement.is_empty():
+		return 0
+	var over := assigned_workers(settlement) - max_workers(settlement)
+	if over <= 0:
+		return 0
+	var workers := get_workers(settlement)
+	var released := 0
+	for job in [JOB_STONE, JOB_WOOD, JOB_FOOD]:
+		if over <= 0:
+			break
+		var n: int = int(workers.get(job, 0))
+		var cut: int = mini(n, over)
+		workers[job] = n - cut
+		over -= cut
+		released += cut
+	return released
+
+## UI で選択中の仕事。
+func get_job_cursor(settlement: Dictionary) -> String:
+	if settlement.is_empty():
+		return JOB_FOOD
+	return str(settlement.get("job_cursor", JOB_FOOD))
+
+## 選択中の仕事を次へ回す (FOOD → WOOD → STONE → FOOD)。
+func cycle_job_cursor(settlement: Dictionary) -> String:
+	if settlement.is_empty():
+		return JOB_FOOD
+	var i := JOB_ORDER.find(get_job_cursor(settlement))
+	var next: String = JOB_ORDER[(i + 1) % JOB_ORDER.size()]
+	settlement["job_cursor"] = next
+	return next
+
+## 指定の仕事の人数を1周させる。専用画面を作らないための循環方式。
+##
+##   空き人口がある → +1
+##   空き人口が無い → その仕事を 0 に戻す (= 減員)
+##   どちらも不可   → 何もしない
+##
+## 戻り値: { "result": "add"|"clear"|"none", "job": String, "delta": int }
+func cycle_worker(settlement: Dictionary, job: String) -> Dictionary:
+	if settlement.is_empty() or not JOB_ORDER.has(job):
+		return {"result": "none", "job": job, "delta": 0}
+	var workers := get_workers(settlement)
+	if available_workers(settlement) > 0:
+		workers[job] = int(workers.get(job, 0)) + 1
+		return {"result": "add", "job": job, "delta": 1}
+	var n: int = int(workers.get(job, 0))
+	if n > 0:
+		workers[job] = 0
+		return {"result": "clear", "job": job, "delta": -n}
+	return {"result": "none", "job": job, "delta": 0}
+
+## 直接指定 (セーブ復元やテスト用)。人口上限で必ず切り詰める。
+func set_workers(settlement: Dictionary, job: String, count: int) -> void:
+	if settlement.is_empty() or not JOB_ORDER.has(job):
+		return
+	get_workers(settlement)[job] = maxi(count, 0)
+	clamp_workers(settlement)
+
+# ── 労働者の自動採集 ─────────────────────────────────────────────
+func is_work_turn(turn: int) -> bool:
+	return turn > 0 and turn % WORK_INTERVAL_TURNS == 0
+
+## 1拠点ぶんの自動採集。
+##
+## 労働者1人につき、担当資源の「一番近い採取可能ノード」から1つ取る。
+## 取った資源は無から湧かせず、必ず実在ノードの remaining を減らす
+## (プレイヤーと同じ資源プールを奪い合う)。枯れれば既存の regrow に乗る。
+##
+## 収穫はその拠点の storage に直接入る。プレイヤーの carry は経由しない。
+##
+## 戻り値: { "gathered": {job: n}, "total": int, "workers": int, "idle": bool }
+##   idle … 労働者がいるのに何も採れなかった (周辺が枯れた合図)
+func work_settlement(settlement: Dictionary, resources: ResourceSystem) -> Dictionary:
+	var result := {"gathered": {}, "total": 0, "workers": 0, "idle": false}
+	if settlement.is_empty() or resources == null:
+		return result
+	clamp_workers(settlement)
+	var center: Vector2i = settlement["position"]
+	var storage: Dictionary = settlement["storage"]
+	var workers := get_workers(settlement)
+	for job in JOB_ORDER:
+		var n: int = int(workers.get(job, 0))
+		if n <= 0:
+			continue
+		result["workers"] = int(result["workers"]) + n
+		var res_type: String = JOB_RESOURCE[job]
+		var got := 0
+		for i in n:
+			var target = resources.find_nearest_available(center, WORK_RADIUS, res_type)
+			if target == null:
+				break        # 範囲内に残っていない。残りの労働者も空振り
+			got += resources.take_from_node(target.x, target.y, WORK_YIELD_PER_WORKER)
+		if got > 0:
+			storage[res_type] = storage.get(res_type, 0) + got
+			result["gathered"][job] = got
+			result["total"] = int(result["total"]) + got
+	result["idle"] = int(result["workers"]) > 0 and int(result["total"]) <= 0
+	return result
+
+## 全拠点の自動採集。労働者がいる拠点の結果だけ返す。
+func work_all(resources: ResourceSystem) -> Array[Dictionary]:
+	var results: Array[Dictionary] = []
+	for s in settlements:
+		var r := work_settlement(s, resources)
+		if int(r["workers"]) <= 0:
+			continue
+		r["settlement"] = s
+		results.append(r)
+	return results
+
+# ── 集落の環境圧 ─────────────────────────────────────────────────
+## その拠点がかける圧の強さ。自分の拠点の人口だけを使う
+## (部族全体の人口を各拠点にフルで乗せない — 人口は拠点ごとに分かれているので
+##  Godot版では自然にこう書ける)。
+##
+##   pressure = population + assigned_workers * SETTLEMENT_WORKER_WEIGHT
+##
+## 人口0の CAMP は 0 になり、圧もかからない (無人 CAMP = ただの収納場所)。
+func settlement_pressure(settlement: Dictionary) -> float:
+	var pop := get_population(settlement)
+	if pop <= 0:
+		return 0.0
+	return float(pop) + float(assigned_workers(settlement)) * SETTLEMENT_WORKER_WEIGHT
+
+## 毎ターンの生活圧。中心ほど強く、外側ほど弱い。
+##
+##   distance_factor = 1.0 - distance / SETTLEMENT_PRESSURE_RADIUS
+##   amount = pressure * SETTLEMENT_PRESSURE_COEF * distance_factor
+##
+## 拠点タイルそのものは対象外。資源ごとの減りやすさは ResourceSystem 側で掛かる。
+## 削れた資源の総数を返す。
+func apply_settlement_pressure(settlement: Dictionary, resources: ResourceSystem) -> int:
+	if settlement.is_empty() or resources == null:
+		return 0
+	var pressure := settlement_pressure(settlement)
+	if pressure <= 0.0:
+		return 0
+	var center: Vector2i = settlement["position"]
+	var base_amount := pressure * SETTLEMENT_PRESSURE_COEF
+	var removed := 0
+	for pos in resources.get_nodes_in_radius(center, SETTLEMENT_PRESSURE_RADIUS):
+		var d := Vector2(pos - center).length()
+		if d <= 0.0:
+			continue        # 拠点そのもののタイルは対象外
+		var distance_factor := 1.0 - d / float(SETTLEMENT_PRESSURE_RADIUS)
+		if distance_factor <= 0.0:
+			continue
+		removed += resources.apply_pressure(pos.x, pos.y, base_amount * distance_factor)
+	return removed
+
+func apply_settlement_pressure_all(resources: ResourceSystem) -> int:
+	var removed := 0
+	for s in settlements:
+		removed += apply_settlement_pressure(s, resources)
+	return removed
+
 # ── 移住 (BASE → CAMP) ───────────────────────────────────────────
 ## 送れない理由。OK ("") なら送れる。
 func send_block_reason(camp: Dictionary, amount: int = SEND_POP_AMOUNT) -> String:
@@ -358,11 +598,13 @@ func can_send_population(camp: Dictionary, amount: int = SEND_POP_AMOUNT) -> boo
 func send_population_to_camp(camp: Dictionary, amount: int = SEND_POP_AMOUNT) -> Dictionary:
 	var reason := send_block_reason(camp, amount)
 	if reason != OK:
-		return {"ok": false, "reason": reason, "amount": 0}
+		return {"ok": false, "reason": reason, "amount": 0, "released": 0}
 	var base := get_base()
 	base["population"] = get_population(base) - amount
 	camp["population"] = get_population(camp) + amount
-	return {"ok": true, "reason": OK, "amount": amount}
+	# 人が抜けたぶん、BASE の割当が人口を超えないよう安全側に直す。
+	var released := clamp_workers(base)
+	return {"ok": true, "reason": OK, "amount": amount, "released": released}
 
 # ── 表示 ─────────────────────────────────────────────────────────
 ## HUD 用の1行表示。拠点種別を先頭に置くので BASE/CAMP どちらでも使える。
@@ -386,3 +628,17 @@ func storage_text(settlement: Dictionary) -> String:
 	if has_food_shortage(settlement):
 		text += " LOW"
 	return text
+
+## HUD 用の労働1行。
+##
+##   JOB F2 W1 S0  FREE 2
+##
+## 全拠点の一覧は出さない。今いる拠点 (拠点外なら BASE) の1本だけ。
+func jobs_text(settlement: Dictionary) -> String:
+	if settlement.is_empty():
+		return ""
+	var workers := get_workers(settlement)
+	var parts: Array[String] = []
+	for job in JOB_ORDER:
+		parts.append("%s%d" % [JOB_SHORT[job], int(workers.get(job, 0))])
+	return "JOB %s  FREE %d" % [" ".join(parts), available_workers(settlement)]

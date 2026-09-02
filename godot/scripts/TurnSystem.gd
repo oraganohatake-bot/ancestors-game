@@ -1,7 +1,7 @@
 extends RefCounted
 class_name TurnSystem
 ##
-## ターン進行 (Phase 1 → 2E)。
+## ターン進行 (Phase 1 → 2F)。
 ##
 ## ターン数を数え、年/世代の表示用カウンタを進め、
 ## 毎ターンの世界側の処理 (資源回復 / 人口 / 食料) をここで回す。
@@ -27,14 +27,14 @@ var settlements: SettlementSystem = null
 
 ## このターンに起きた出来事。Main.gd がログに落とすためだけに使う。
 ## TurnSystem は文言を組み立てない (表示は Main の責務のまま)。
-##   { "grown": Array[Dictionary], "food": Array[Dictionary] }
-var last_events: Dictionary = {"grown": [], "food": []}
+##   { "grown": [...], "food": [...], "work": [...] }
+var last_events: Dictionary = {"grown": [], "food": [], "work": []}
 
 func reset() -> void:
 	turn = 0
 	year = 1
 	generation = 1
-	last_events = {"grown": [], "food": []}
+	last_events = {"grown": [], "food": [], "work": []}
 
 ## 1ターン進める。移動/待機のどちらでも呼ぶ。
 func advance_turn() -> void:
@@ -43,17 +43,16 @@ func advance_turn() -> void:
 	_on_turn_advanced()
 	turn_advanced.emit(turn)
 
-## Phase 2 以降の追加ポイント。
-## 意図的に順序を固定しておく:
-##   資源回復 → 人口成長 → 食料周期 → 労働 → 圧力 → 動物 → イベント
+## 毎ターンの世界処理。順序は固定:
+##   資源回復 → 人口成長 → 食料周期 → 労働周期 → 生活圧 → 動物 → イベント
 ##
-## 「回復 → 消費」の順にしてあるのは、Phase 2F で労働者採集と
-## 集落資源圧を _process_workers / _apply_settlement_pressure に足したとき、
-## 世界が回復したあとに集落が取り分を引く形にそのまま乗るため。
-## 人口成長は食料判定より前に置く。成長は「前の周期の食料結果」で決まり、
+## 「回復 → 消費」の順にしてあるので、世界が回復したあとに集落が取り分を引く。
+## 人口成長は食料判定より前。成長は「前の周期の食料結果」で決まり、
 ## その周期の消費結果は次の10ターンに効く。
+## 労働は食料消費の後に置く — その周期に採った果物はその場で食べられず、
+## 次の食料周期に回る (採ってすぐ帳尻が合うと備蓄の意味が薄れるため)。
 func _on_turn_advanced() -> void:
-	last_events = {"grown": [], "food": []}
+	last_events = {"grown": [], "food": [], "work": []}
 	_regrow_resources()
 	_grow_population()
 	_consume_food()
@@ -85,11 +84,23 @@ func _consume_food() -> void:
 		return
 	last_events["food"] = settlements.consume_food_all()
 
+## 労働者の自動採集 (Phase 2F)。WORK_INTERVAL_TURNS ターンごと。
+## 拠点周辺の実在ノードから取るので、プレイヤーと同じ資源プールを削る。
 func _process_workers() -> void:
-	pass          # 労働者処理 (採集/運搬の自動割当) — Phase 2F
+	if settlements == null or resources == null:
+		return
+	if not settlements.is_work_turn(turn):
+		return
+	last_events["work"] = settlements.work_all(resources)
 
+## 集落の生活圧 (Phase 2F)。毎ターン、拠点周辺に薄く効く。
+##
+## 自動採集とは別物。採集は「取りに行った量」、圧は「住んでいるだけで擦り減る量」。
+## ログは出さない — マップに枯渇マークが増えていくことが唯一の合図でいい。
 func _apply_settlement_pressure() -> void:
-	pass          # 集落資源圧 (CAMP 周辺の枯渇) — Phase 2F
+	if settlements == null or resources == null:
+		return
+	settlements.apply_settlement_pressure_all(resources)
 
 func _move_animals() -> void:
 	pass          # 動物移動

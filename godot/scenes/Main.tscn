@@ -149,7 +149,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 3
 theme_override_constants/v_separation = 3
-columns = 2
+columns = 3
 
 [node name="BtnGather" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true
@@ -164,6 +164,13 @@ custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 size_flags_horizontal = 3
 text = "納入"
+
+[node name="BtnCamp" type="Button" parent="Root/Controls/Pad/Act"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+size_flags_horizontal = 3
+text = "設営"
 
 [node name="BtnWait" type="Button" parent="Root/Controls/Pad/Act"]
 unique_name_in_owner = true

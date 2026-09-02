@@ -2,10 +2,11 @@ extends Control
 ##
 ## ANCESTORS — Godot 4 Phase 1 のエントリポイント。
 ##
-## Phase 1 のスコープ:
-##   ランダムマップ / タイル移動 / 探索(記憶される霧) / ターン進行 / スマホ向けUI
+## ここまでのスコープ:
+##   ランダムマップ / タイル移動 / 探索(記憶される霧) / ターン進行 / スマホ向けUI /
+##   資源の配置・採集 / 所持上限 / BASE 納入 / 資源regrow / CAMP (遠征用の中継拠点)
 ## まだ載せないもの:
-##   人口・労働者・CAMP・資源枯渇・動物・納品・クラフト
+##   人口・労働者・集落資源圧・動物・狩り・クラフト・CAMP間輸送・セーブ
 ##
 ## 画面構成 (Canvas版に合わせた縦持ち):
 ##   上部: ステータス   中央: マップ   下部: ログ + 方向ボタン
@@ -39,6 +40,7 @@ var log_lines: Array[String] = []
 @onready var log_label: Label = %LogLabel
 @onready var btn_gather: Button = %BtnGather
 @onready var btn_deposit: Button = %BtnDeposit
+@onready var btn_camp: Button = %BtnCamp
 
 func _ready() -> void:
 	# 毎ターンの資源回復を TurnSystem に任せる (Main は流れだけを持つ)
@@ -51,6 +53,7 @@ func _ready() -> void:
 	%BtnWait.pressed.connect(_on_wait_pressed)
 	%BtnGather.pressed.connect(_on_gather_pressed)
 	%BtnDeposit.pressed.connect(_on_deposit_pressed)
+	%BtnCamp.pressed.connect(_on_camp_pressed)
 	%BtnNewGame.pressed.connect(new_game)
 	# SubViewportContainer.stretch = true なので SubViewport は
 	# コンテナサイズに自動追従する (端末ごとの縦横比はここで吸収される)。
@@ -66,6 +69,7 @@ func new_game() -> void:
 	# 開始地点をそのまま BASE にする。ここが往復の起点になる。
 	var spawn := map_gen.find_spawn(tiles)
 	settlements.reset()
+	settlements.setup(tiles)
 	settlements.create_base(spawn)
 	player.reset_fog()
 	player.place_at(spawn)
@@ -89,6 +93,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("deposit"):
 		_on_deposit_pressed()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("build_camp"):
+		_on_camp_pressed()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("wait_turn"):
 		_on_wait_pressed()
@@ -137,9 +144,11 @@ func _on_gather_pressed() -> void:
 		_add_log("> 所持上限 %d/%d" % [resources.carried_total(), ResourceSystem.CARRY_CAPACITY])
 	_refresh()
 
-## 納品。BASE の上にいて、かつ所持品がある場合のみ成功しターンを消費する。
+## 納品。立っている拠点へ納める。BASE か CAMP かで処理を分けない。
+## 拠点外 / 手ぶら の空振りではターンを消費しない。
 func _on_deposit_pressed() -> void:
-	var settlement := settlements.settlement_at(player.grid_x, player.grid_y)
+	var here := Vector2i(player.grid_x, player.grid_y)
+	var settlement := settlements.settlement_at(here.x, here.y)
 	if settlement.is_empty():
 		_add_log("> 拠点外")
 		_refresh()
@@ -149,10 +158,33 @@ func _on_deposit_pressed() -> void:
 		_refresh()
 		return
 	var taken := resources.take_all()
-	var total := settlements.deposit(settlement, taken)
+	var total := settlements.deposit_to_settlement(here, taken)
 	turn_system.advance_turn()
-	_add_log("> 納入 %d" % total)
+	_add_log("> %s 納入 %d" % [settlement["type"], total])
 	_refresh()
+
+## CAMP 設営。BASE の備蓄から資材を払い、今立っている場所に中継拠点を作る。
+## 失敗 (地形不適 / 重複 / 上限 / 資材不足) ではターンを消費しない。
+func _on_camp_pressed() -> void:
+	var here := Vector2i(player.grid_x, player.grid_y)
+	var result := settlements.build_camp(here)
+	if not result["ok"]:
+		_add_log("> %s" % _camp_fail_label(result["reason"]))
+		_refresh()
+		return
+	turn_system.advance_turn()
+	_add_log("> CAMP SET %d/%d" % [settlements.camp_count(), SettlementSystem.MAX_CAMPS])
+	_refresh()
+
+func _camp_fail_label(reason: String) -> String:
+	match reason:
+		SettlementSystem.REASON_TERRAIN: return "設営不可 地形"
+		SettlementSystem.REASON_OCCUPIED: return "設営不可 拠点上"
+		SettlementSystem.REASON_LIMIT: return "設営不可 上限 %d" % SettlementSystem.MAX_CAMPS
+		SettlementSystem.REASON_COST: return "資材不足 W%d S%d" % [
+			SettlementSystem.CAMP_COST[ResourceSystem.WOOD],
+			SettlementSystem.CAMP_COST[ResourceSystem.STONE]]
+	return "設営不可"
 
 func _on_wait_pressed() -> void:
 	player.reveal(tiles)
@@ -168,6 +200,7 @@ func _refresh() -> void:
 	map_view.queue_redraw()
 	_update_gather_button(target)
 	_update_deposit_button()
+	_update_camp_button()
 	# プレイヤー中心カメラ (マップは画面に収まらないのでスクロールさせる)
 	map_camera.position = Vector2(
 		player.grid_x * MapView.TILE_PX + MapView.TILE_PX * 0.5,
@@ -175,7 +208,11 @@ func _refresh() -> void:
 	status_label.text = "TURN %04d   CARRY %d/%d" % [
 		turn_system.turn, resources.carried_total(), ResourceSystem.CARRY_CAPACITY]
 	inventory_label.text = resources.inventory_text()
-	storage_label.text = settlements.storage_text(settlements.get_base())
+	# 拠点の上ならその拠点の備蓄、拠点外なら BASE の備蓄 (CAMP 設営の原資) を出す。
+	# 全 CAMP の一覧は出さない。行は常に1本だけ。
+	var here_settlement := settlements.settlement_at(player.grid_x, player.grid_y)
+	var shown := here_settlement if not here_settlement.is_empty() else settlements.get_base()
+	storage_label.text = settlements.storage_text(shown)
 	log_label.text = "\n".join(log_lines)
 
 ## 採れるものが無いときはボタンを無効化する。
@@ -183,11 +220,16 @@ func _refresh() -> void:
 func _update_gather_button(target) -> void:
 	btn_gather.disabled = resources.is_full() or target == null
 
-## 納品ボタン: BASE 上かつ所持品ありのときだけ押せる。
+## 納品ボタン: 拠点 (BASE/CAMP) の上かつ所持品ありのときだけ押せる。
 func _update_deposit_button() -> void:
-	var on_base := settlements.has_settlement_at(player.grid_x, player.grid_y)
+	var on_settlement := settlements.has_settlement_at(player.grid_x, player.grid_y)
 	var carrying := resources.carried_total()
-	btn_deposit.disabled = not (on_base and carrying > 0)
+	btn_deposit.disabled = not (on_settlement and carrying > 0)
+
+## 設営ボタン: 地形・重複・上限・資材が全て満たされたときだけ押せる。
+func _update_camp_button() -> void:
+	btn_camp.disabled = not settlements.can_build_camp(
+		Vector2i(player.grid_x, player.grid_y))
 
 func _add_log(line: String) -> void:
 	log_lines.append(line)

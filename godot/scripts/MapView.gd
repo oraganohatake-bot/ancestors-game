@@ -160,8 +160,10 @@ func _draw_resource(x: int, y: int, ox: int, oy: int) -> void:
 			draw_rect(Rect2(cx - 3, cy, 7, 1), c, true)
 
 # ── 拠点 ─────────────────────────────────────────────────────────
-## 「屋根 + 柱」だけの記号。小屋の絵にはしない。地図上に文字は出さない。
-## プレイヤーが上に立っても分かるよう、中央ではなくタイルの外側に描く。
+## 拠点は文字ではなく記号で示す。地図上に "BASE" / "CAMP" とは書かない。
+##   BASE … 1px の囲い + 屋根。「囲われた場所」
+##   CAMP … 屋根 + 柱2本だけの天幕。囲いが無いぶん小さく、仮設に見える
+## どちらもプレイヤーが上に立つ前提なので、中央は空けておく。
 func _draw_settlements() -> void:
 	if settlements == null:
 		return
@@ -171,10 +173,23 @@ func _draw_settlements() -> void:
 			continue
 		var ox: int = p.x * TILE_PX
 		var oy: int = p.y * TILE_PX
-		# 1px の枠だけ。中央は空けておき、プレイヤーが立っても両方読めるようにする。
-		draw_rect(Rect2(ox + 1, oy + 1, TILE_PX - 2, TILE_PX - 2), COLOR_INK, false, 1.0)
-		# 屋根の短線 (上辺の内側に "^" を1つ)
-		_draw_caret(ox + 10, oy + 3, 3, COLOR_INK)
+		if s["type"] == SettlementSystem.TYPE_CAMP:
+			_draw_camp_mark(ox, oy)
+		else:
+			_draw_base_mark(ox, oy)
+
+func _draw_base_mark(ox: int, oy: int) -> void:
+	# 1px の枠だけ。中央は空けておき、プレイヤーが立っても両方読めるようにする。
+	draw_rect(Rect2(ox + 1, oy + 1, TILE_PX - 2, TILE_PX - 2), COLOR_INK, false, 1.0)
+	# 屋根の短線 (上辺の内側に "^" を1つ)
+	_draw_caret(ox + 10, oy + 3, 3, COLOR_INK)
+
+func _draw_camp_mark(ox: int, oy: int) -> void:
+	# 天幕: 屋根の "^" と、その下に柱2本。囲いは描かない。
+	# 柱はタイルの左右端寄りに置き、中央に立つプレイヤーの人型と重ねない。
+	_draw_caret(ox + 10, oy + 2, 5, COLOR_INK)
+	draw_rect(Rect2(ox + 5, oy + 7, 1, 6), COLOR_INK, true)
+	draw_rect(Rect2(ox + 14, oy + 7, 1, 6), COLOR_INK, true)
 
 ## 採集対象は角の括弧だけで示す (円は使わない)。
 func _draw_gather_target() -> void:

@@ -25,6 +25,30 @@ const RIVER_SOURCE_SPACING := 8 # 川の源(高山頂)同士の最小間隔
 const RIVER_DENSE_DIST := 1     # 川からこの距離まで → 大きい森
 const RIVER_SMALL_DIST := 3     # さらにこの距離まで → 小さい森
 
+# ── 初期立地の評価 (Phase 2G) ────────────────────────────────────
+## 労働範囲 (SettlementSystem.WORK_RADIUS = 4) と揃えてある。
+## 「BASE の労働者が実際に通える範囲が豊かか」で選ぶため。
+const SPAWN_SCAN_RADIUS := 4
+const SPAWN_EDGE_MARGIN := 4          # 海岸ギリギリに置かない
+const SPAWN_MIN_LAND_RATIO := 0.6     # 岬・小島を弾く
+const SPAWN_RIVER_CAP := 4.0          # 水辺ボーナスの頭打ち (川沿いに寄りすぎない)
+
+const SPAWN_W_FRUIT := 5.0            # 最優先。序盤の食料
+const SPAWN_W_FOREST := 2.0           # 木材と、果物の湧く下地
+const SPAWN_W_GRASS := 1.0            # 動ける平地
+const SPAWN_W_RIVER := 1.5            # 水辺
+## 山が多すぎる立地は避ける。ただし「山ゼロ」を狙うわけではない
+## (石が全く採れない立地になり、CAMP 設営資材すら現地調達できなくなる)。
+## 山は減点項ではなく、下の2段階選抜で「同格なら山が近い方」として使う。
+const SPAWN_MOUNTAIN_CAP := 18.0      # これ以上の山は「石が近い」と数えない (超過は減点)
+const SPAWN_W_MOUNTAIN_EXCESS := -1.5 # 山だらけ (= 住めない) のぶんは減点
+
+## 2段階選抜の許容幅。1段目 (暮らしやすさ) でこの点差以内に入った候補の中から、
+## 2段目で石アクセスが最も良い地点を選ぶ。
+## 「果物タイル2枚ぶんの暮らしやすさは、石が採れることと交換してよい」という意味。
+const SPAWN_SCORE_TOLERANCE := 50.0
+const SPAWN_W_CENTER := -0.15         # 中心への近さは同点崩し程度に落とす
+
 var _rng := RandomNumberGenerator.new()
 
 ## マップを生成して 2次元配列 tiles[y][x] を返す。
@@ -272,8 +296,136 @@ func _river_distance_field(tiles: Array) -> Array:
 			queue.append(Vector2i(nx, ny))
 	return dist
 
-## プレイヤーの初期位置を探す。島の中心に近い GRASS を選ぶ。
+## プレイヤーの初期位置を探す (Phase 2G で「中心に近い」から「暮らせる」へ変更)。
+##
+## 以前は島の中心に最も近い GRASS/FOREST を選んでいたが、生成器は島の中心を
+## 最高峰にしているので、BASE が必ず中央山塊の縁に落ちていた。
+## 結果として石だらけ・果物ほぼ無しの立地になり、FOOD 労働者が機能しなかった。
+##
+## そこで候補地の周辺 SPAWN_SCAN_RADIUS を見て「序盤に生活できるか」で選ぶ。
+## 最優先は果物アクセス。中心への近さは同点崩しの弱い項に落とす。
+##
+## 地形だけで評価する (ResourceSystem を参照しない = 依存を一方向に保つ)。
+## 果物は「森に隣接した草原」と「森」にしか湧かないので、その2種を数えれば
+## 果物アクセスの代理指標になる。重みは実際の出現率の比に合わせてある。
 func find_spawn(tiles: Array) -> Vector2i:
+	var cx := (MAP_W - 1) / 2.0
+	var cy := (MAP_H - 1) / 2.0
+	# 1段目: 暮らしやすさ (果物 > 森 > 草原 > 水辺) で全候補を採点する。
+	var scored: Array = []
+	var best_score := -1e9
+	for y in range(SPAWN_EDGE_MARGIN, MAP_H - SPAWN_EDGE_MARGIN):
+		for x in range(SPAWN_EDGE_MARGIN, MAP_W - SPAWN_EDGE_MARGIN):
+			var t: int = tiles[y][x]
+			if t != Tile.GRASS and t != Tile.FOREST:
+				continue
+			var score = _spawn_score(tiles, x, y, cx, cy)
+			if score == null:
+				continue        # 陸が少なすぎる (岬・小島・海岸ギリギリ)
+			scored.append({"pos": Vector2i(x, y), "score": float(score),
+				"stone": _count_mountains(tiles, x, y)})
+			best_score = maxf(best_score, float(score))
+	if scored.is_empty():
+		# 島が極端に小さいなど、条件を満たす地点が無い場合は従来どおり中心優先。
+		return _find_spawn_nearest_center(tiles)
+	# 2段目: 上位群の中から石アクセスが一番良い地点を選ぶ。
+	#
+	# 山は森/草原と地形的に排他なので、山を加点項にしても1段目では絶対に勝てない
+	# (山1枚は果物草原1枚を押しのけるため)。かといって山ゼロの立地だと石が
+	# 一切採れず、CAMP の設営資材すら現地で用意できない。
+	# そこで「果物で上位に絞り、その中で石に一番近い場所」という順序にしてある。
+	var best: Dictionary = scored[0]
+	var best_key := -1e9
+	for c in scored:
+		if float(c["score"]) < best_score - SPAWN_SCORE_TOLERANCE:
+			continue
+		# 石アクセスを主キー、暮らしやすさを副キーにする (どちらも決定的)
+		var key: float = minf(float(c["stone"]), SPAWN_MOUNTAIN_CAP) * 1000.0 + float(c["score"])
+		if key > best_key:
+			best_key = key
+			best = c
+	return best["pos"]
+
+## 半径内の山タイル数。石アクセスの代理指標。
+func _count_mountains(tiles: Array, x: int, y: int) -> int:
+	var r := SPAWN_SCAN_RADIUS
+	var n := 0
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			if dx * dx + dy * dy > r * r:
+				continue
+			var nx := x + dx
+			var ny := y + dy
+			if nx < 0 or ny < 0 or nx >= MAP_W or ny >= MAP_H:
+				continue
+			var t: int = tiles[ny][nx]
+			if t == Tile.MOUNTAIN or t == Tile.HIGH_MOUNTAIN:
+				n += 1
+	return n
+
+## 候補地の「暮らしやすさ」。陸が少なすぎる地点は null を返して弾く。
+func _spawn_score(tiles: Array, x: int, y: int, cx: float, cy: float):
+	var r := SPAWN_SCAN_RADIUS
+	var fruit := 0.0      # 果物が湧きうる地形 (森に隣接した草原 / 森)
+	var forest := 0.0
+	var grass := 0.0
+	var mountain := 0.0
+	var river := 0.0
+	var land := 0
+	var total := 0
+	for dy in range(-r, r + 1):
+		for dx in range(-r, r + 1):
+			if dx * dx + dy * dy > r * r:
+				continue
+			var nx := x + dx
+			var ny := y + dy
+			if nx < 0 or ny < 0 or nx >= MAP_W or ny >= MAP_H:
+				continue
+			total += 1
+			var t: int = tiles[ny][nx]
+			if t == Tile.SEA:
+				continue
+			land += 1
+			match t:
+				Tile.GRASS:
+					grass += 1.0
+					# 森に隣接した草原が一番果物が濃い (ResourceSystem の 0.38)
+					if _has_neighbor_tile(tiles, nx, ny, Tile.FOREST):
+						fruit += 1.0
+				Tile.FOREST:
+					forest += 1.0
+					fruit += 0.6              # 森そのもの (0.24 / 0.38 ≒ 0.6)
+				Tile.DEEP_FOREST:
+					forest += 1.0             # 木材源。果物は出ない
+				Tile.MOUNTAIN, Tile.HIGH_MOUNTAIN:
+					mountain += 1.0
+				Tile.RIVER:
+					river += 1.0
+	if total <= 0:
+		return null
+	# 海に囲まれた岬や小島には置かない
+	if float(land) / float(total) < SPAWN_MIN_LAND_RATIO:
+		return null
+	var center_dist := Vector2(float(x) - cx, float(y) - cy).length()
+	return fruit * SPAWN_W_FRUIT \
+		+ forest * SPAWN_W_FOREST \
+		+ grass * SPAWN_W_GRASS \
+		+ minf(river, SPAWN_RIVER_CAP) * SPAWN_W_RIVER \
+		+ maxf(mountain - SPAWN_MOUNTAIN_CAP, 0.0) * SPAWN_W_MOUNTAIN_EXCESS \
+		+ center_dist * SPAWN_W_CENTER
+
+func _has_neighbor_tile(tiles: Array, x: int, y: int, target: int) -> bool:
+	for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var nx: int = x + d.x
+		var ny: int = y + d.y
+		if nx < 0 or ny < 0 or nx >= MAP_W or ny >= MAP_H:
+			continue
+		if tiles[ny][nx] == target:
+			return true
+	return false
+
+## 旧実装。条件を満たす地点が無かったときの保険。
+func _find_spawn_nearest_center(tiles: Array) -> Vector2i:
 	var cx := MAP_W / 2
 	var cy := MAP_H / 2
 	var best := Vector2i(cx, cy)

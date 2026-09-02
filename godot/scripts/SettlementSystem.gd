@@ -70,7 +70,11 @@ const GROWTH_RATE_PER_TURN := 0.002
 
 ## 食料 (FRUIT) の消費。毎ターン全員ぶんは重すぎるので周期でまとめて引く。
 ##   FOOD_INTERVAL_TURNS ターンごとに  必要量 = population * FOOD_PER_PERSON
-const FOOD_INTERVAL_TURNS := 10
+##
+## Phase 2G で 10 → 30 に緩和。10 のままだと POP15 で 1.5 個/ターンとなり、
+## 果物ノードの密度と regrow (80-100ターン) では労働者を何人置いても届かなかった。
+## 30 なら序盤は FOOD 労働者1〜2人で回り、人口が増えると足りなくなる。
+const FOOD_INTERVAL_TURNS := 30
 const FOOD_PER_PERSON := 1
 
 ## 移住1回で動く人数。

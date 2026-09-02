@@ -146,15 +146,16 @@ func _test_food_interval() -> void:
 	var st: SettlementSystem = w["settlements"]
 	var ts: TurnSystem = w["turns"]
 	var base: Dictionary = w["base"]
+	var iv := SettlementSystem.FOOD_INTERVAL_TURNS
 	_stock_fruit(base, 30)
-	_advance(ts, 9)
-	_eq("8. 9ターン目までは食料を消費しない",
+	_advance(ts, iv - 1)
+	_eq("8. 周期の直前までは食料を消費しない",
 		base["storage"][ResourceSystem.FRUIT], 30)
-	ts.advance_turn()   # turn 10
-	_eq("8. 10ターン目に population ぶん消費 (6)",
+	ts.advance_turn()   # turn = iv
+	_eq("8. %dターン目に population ぶん消費 (6)" % iv,
 		base["storage"][ResourceSystem.FRUIT], 24)
-	_advance(ts, 10)    # turn 20
-	_eq("8. 20ターン目にもう一度消費",
+	_advance(ts, iv)    # turn = iv * 2
+	_eq("8. 次の周期でもう一度消費",
 		base["storage"][ResourceSystem.FRUIT], 18)
 
 func _test_food_independent() -> void:
@@ -170,7 +171,7 @@ func _test_food_independent() -> void:
 	st.send_population_to_camp(camp)          # BASE 6→4, CAMP 0→2
 	_eq("9. 移住後 BASE 人口 4", st.get_population(base), 4)
 	_eq("9. 移住後 CAMP 人口 2", st.get_population(camp), 2)
-	_advance(ts, 10)
+	_advance(ts, SettlementSystem.FOOD_INTERVAL_TURNS)
 	_eq("9. BASE は自分の備蓄から 4 消費",
 		base["storage"][ResourceSystem.FRUIT], 36)
 	_eq("9. CAMP は自分の備蓄から 2 消費",
@@ -178,7 +179,7 @@ func _test_food_independent() -> void:
 	# 無人 CAMP は食わない
 	var camp2: Dictionary = st.build_camp(Vector2i(7, 8))["settlement"]
 	_stock_fruit(camp2, 5)
-	_advance(ts, 10)
+	_advance(ts, SettlementSystem.FOOD_INTERVAL_TURNS)
 	_eq("9. 無人 CAMP は食料を消費しない",
 		camp2["storage"][ResourceSystem.FRUIT], 5)
 
@@ -187,8 +188,9 @@ func _test_food_shortage() -> void:
 	var st: SettlementSystem = w["settlements"]
 	var ts: TurnSystem = w["turns"]
 	var base: Dictionary = w["base"]
+	var iv := SettlementSystem.FOOD_INTERVAL_TURNS
 	_stock_fruit(base, 2)                     # 必要 6 に対して 2 しかない
-	_advance(ts, 10)                          # turn 10: 食料周期で不足が確定
+	_advance(ts, iv)                          # 最初の食料周期で不足が確定
 	_eq("10/11. 不足時も備蓄は 0 止まり (マイナスにしない)",
 		base["storage"][ResourceSystem.FRUIT], 0)
 	_ok("10. food_shortage が立つ", st.has_food_shortage(base))
@@ -204,7 +206,7 @@ func _test_food_shortage() -> void:
 
 	# 食料が戻れば shortage が解除され、成長が再開する
 	_stock_fruit(base, 50)
-	_advance(ts, 5)                           # turn 20 で再判定
+	_advance(ts, iv - 5)                      # 次の食料周期で再判定
 	_ok("10. 補充後は shortage が解除される", not st.has_food_shortage(base))
 	_eq("10. 補充後は必要量ぶんだけ引かれる",
 		base["storage"][ResourceSystem.FRUIT], 44)

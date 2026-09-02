@@ -162,8 +162,8 @@ func _test_work_interval() -> void:
 	var ts: TurnSystem = w["turns"]
 	var base: Dictionary = w["base"]
 	base["population"] = 3
-	# WOOD で測る。FRUIT だと 10ターン目の食料消費と同じ資源になって
-	# 「労働で増えた ぶん」が見えなくなるため。
+	# WOOD で測る。FRUIT だと食料消費と同じ資源になって
+	# 「労働で増えたぶん」が見えなくなるため。
 	st.set_workers(base, SettlementSystem.JOB_WOOD, 1)
 	for i in 6:
 		_place(res, 10 + i, 13, ResourceSystem.WOOD)      # 圧の弱い外周へ散らす
@@ -174,7 +174,7 @@ func _test_work_interval() -> void:
 	_eq("6. 5ターン目に労働1回ぶん (worker 1 → +1)",
 		base["storage"][ResourceSystem.WOOD], 1)
 	_advance(ts, 5)                                       # turn 10
-	_eq("6. 10ターン目にもう1回", base["storage"][ResourceSystem.WOOD], 2)
+	_eq("6. 次の周期にもう1回", base["storage"][ResourceSystem.WOOD], 2)
 	# 労働で採った果物はその周期の食事には間に合わない (順序: 食料 → 労働)
 	var w2 := _make_world()
 	var st2: SettlementSystem = w2["settlements"]
@@ -184,9 +184,13 @@ func _test_work_interval() -> void:
 	st2.set_workers(base2, SettlementSystem.JOB_FOOD, 1)
 	for i in 6:
 		_place(res2, 10 + i, 13, ResourceSystem.FRUIT)
-	_advance(w2["turns"], 10)
-	_eq("6. t5 の収穫は t10 の食事で消える (食料 → 労働の順)",
-		base2["storage"][ResourceSystem.FRUIT], 1)
+	# 食料周期のターンでは「食料消費 → 労働」の順なので、
+	# その周期に採った果物はその場の食事には間に合わない。
+	var iv := SettlementSystem.FOOD_INTERVAL_TURNS
+	var cycles := iv / SettlementSystem.WORK_INTERVAL_TURNS   # 周期内の労働回数
+	_advance(w2["turns"], iv)
+	_eq("6. 収穫 %d - 食事 3 = %d (食料 → 労働の順)" % [cycles, cycles - 3],
+		base2["storage"][ResourceSystem.FRUIT], cycles - 3)
 	_ok("6. is_work_turn: 5/10 は true, 4/6 は false",
 		st.is_work_turn(5) and st.is_work_turn(10) and not st.is_work_turn(4)
 		and not st.is_work_turn(6) and not st.is_work_turn(0))
@@ -468,9 +472,10 @@ func _test_2e_still_works() -> void:
 	var st: SettlementSystem = w["settlements"]
 	var ts: TurnSystem = w["turns"]
 	var base: Dictionary = w["base"]
+	var iv := SettlementSystem.FOOD_INTERVAL_TURNS
 	base["storage"][ResourceSystem.FRUIT] = 30
-	_advance(ts, 10)
-	_eq("23. 食料周期は 10ターンのまま (POP6 → -6)",
+	_advance(ts, iv)
+	_eq("23. 食料周期は健在 (POP6 → -6)",
 		base["storage"][ResourceSystem.FRUIT], 24)
 	_eq("23. 人口は据え置き", st.get_population(base), 6)
 	# 成長
@@ -479,7 +484,7 @@ func _test_2e_still_works() -> void:
 	_eq("23. 人口成長は生きている", st.get_population(base), 7)
 	# 不足
 	base["storage"][ResourceSystem.FRUIT] = 0
-	_advance(ts, 9)                                       # turn 20
+	_advance(ts, iv - 1)                                  # 次の食料周期まで
 	_ok("23. 食料不足は立つ", st.has_food_shortage(base))
 	_eq("23. 不足でも人口は減らない", st.get_population(base), 7)
 	_eq("23. HUD の POP 行は健在", st.storage_text(base).substr(0, 14), "BASE POP 07/30")
